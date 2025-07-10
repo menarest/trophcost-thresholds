@@ -4,4 +4,4 @@ Identifying thresholds of management intensity and environmental conditions is c
 
 This study is based on data from previous projects of the Biodiversity Exploratories programme (DFG Priority Programme 1374), which can be found under IDs 23586, 12526, 26487, 18148, 31018 and 20826.
 
-The project contain a unique Quarto document that reads all datasets, run all the analyses, and create all plots of the paper. 
+The project contains a unique Quarto document that reads all datasets, runs all the analyses, and creates all the plots of the paper. 
