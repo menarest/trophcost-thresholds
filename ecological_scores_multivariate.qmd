@@ -1,0 +1,3601 @@
+---
+title: "Appendix A: Environmental and management thresholds for different conservation goals in grassland plant and butterfly communities"
+date: 2024-11-27
+author:
+  - name: Esteban Menares
+    orcid: 0000-0002-3731-3452
+    affiliation:
+      - name: Brandenburg University of Technology Cottbus-Senftenberg
+  - name: Hugo Saiz
+    orcid: 0000-0002-7568-2996
+    affiliation:
+      - name: Universidad de Zaragoza
+  - name: Klaus Birkhofer
+    orcid: 0000-0002-9301-2443
+    affiliation: 
+      - name: Brandenburg University of Technology Cottbus-Senftenberg
+  - name: Jörg Gelbrecht
+    affiliation: 
+      - name: NABU Brandenburg
+format:
+  html:
+    # documentclass: article
+    toc: true
+    toc-depth: 4
+    toc-title: Contents
+    number-sections: true
+    code-fold: show
+    code-tools: true
+    lof: FALSE # list of figures
+    lot: FALSE # list of tables
+    # mainfont: Times New Roman
+    colorlinks: true
+execute:
+  echo: FALSE
+  eval: true
+  warning: false
+knitr:
+  opts_chunk:
+    fig.path: "output/multivar_analysis/"  # Save all figures 
+editor_options: 
+  chunk_output_type: console
+bibliography: references.bib 
+---
+
+# Set up
+
+```{r}
+#| message: FALSE
+#| echo: true
+
+library(tidyverse)
+library(ggpubr) # publication-ready formatting for ggplots
+library(corrplot) # for making nice correlation visualizations/plots
+library(kableExtra) # for extra table formatting
+library(gghighlight) # for highlighting ggplots
+library(factoextra) # visialise PCAs
+library(lattice) # for levelplot function for PCA loadings
+library(coefplot) # to make a coefficients plot
+library(vegan) # ordinations
+library(TITAN2) # Threshold Indicator Taxa Analysis 
+library(doParallel)
+library(doRNG)
+
+# solve packages conflicts
+
+conflicted::conflicts_prefer(dplyr::select)
+conflicted::conflicts_prefer(dplyr::filter)
+conflicted::conflicts_prefer(dplyr::lag)
+conflicted::conflicts_prefer(AICcmodavg::AICc)
+conflicted::conflicts_prefer(coefplot::coefplot)
+
+# set theme for all plots
+
+theme_set(theme_pubr(10))
+
+# Create a cluster and set seed for TITAN reproducibility
+parallel::detectCores() # we can work with 8 cores in parallel
+cl <- makeCluster(8) # 8 when working with ncpus = 8 in TITAN
+registerDoParallel(cl)
+registerDoRNG(seed = 42)
+
+# Read in data
+
+# scores_ecological: ecological conservation scores (conservation goals) of species per site i.e. our response variables. This was prepared in the script ~/Documents/BTU-PhD/troph-cost/scores_exploration.qmd
+
+# scores_site: conservation scores of species summed up  per site
+scores_site <- 
+  read_csv('data/processed/scores_ecological.csv') %>% 
+  rename_with(., tolower, everything()) %>% 
+  # remove the "_pa" ending within cols
+  rename_with(.fn = ~str_replace_all(., "_pa$", ""), 
+              .cols = everything()) %>% 
+  # Replace names of columns for specific indicators
+  rename_with(.fn = ~ str_replace_all(
+    .,
+    c(
+      "\\bconnectance\\b" = "connectance",
+      "\\bsn_multidiv\\b" = "multidiv",
+      "\\bcwm_n_crop_pest\\b" = "crop_pest_potential",
+      "\\bn_red_list_plant\\b" = "red_list_plants",
+      "\\bcwm_av_crops\\b" = "pollination_potential",
+      "\\bz_score_nest\\b" = "nestedness",
+      "\\bn_lepi\\b" = "butterfly_richness",
+      "\\bav_reg_dist_lepi\\b" = "reg_dist_butterflies",
+      "\\bsum_troph_int\\b" = "trophic_interactions",
+      "\\bav_reg_dist_plant\\b" = "reg_dist_plants",
+      "\\bn_red_list_lepi\\b" = "red_list_butterflies",
+      "\\bn_plant\\b" = "plant_richness",
+      "\\bn_unique_int\\b" = "unique_trophic_interactions",
+      "\\bav_threat_lepi\\b" = "threat_butterflies",
+      "\\bav_threat_plant\\b" = "threat_plants",
+      "\\bsum_abund_lepi\\b" = "abund_butterflies"
+    )
+  ), .cols = everything())
+
+
+# sites: table with all environmental and land use variables
+
+sites <- read_csv('data/raw/sites.csv') %>% 
+  rename_with(tolower, everything()) %>% 
+  filter(epid %in% scores_site$epid)
+```
+
+This document contains the exploration and selection of predictors and the ecological modelling using these predictors for the conservation of butterflies (Lepidoptera: Rhopalocera) and plants in permanent grasslands in 89 sites in two regions in Germany. Region ALB in Baden-Württemberg (south-west) and region SCH in Brandenburg (north-east).
+
+# Data structure: indicators (responses)
+
+```{r}
+#| label: tbl-A9
+#| tbl-cap: "Overview of response variables, their definition and the group assigned."
+
+tibble(
+  `No.` = (1:17),
+  `Goal (response variables)` = c(
+    "Red list butterflies",
+    "Red list plants",
+    "Threat-level butterflies",
+    "Threat-level plants",
+    "Butterfly biomass",
+    "Butterfly abundance",
+    "Regional distribution butterflies",
+    "Regional distribution plants",
+    "Butterfly richness",
+    "Plant richness",
+    "Multidiversity",
+    "Trophic interactions",
+    "Unique trophic interactions",
+    "Connectance",
+    "Nestedness",
+    "Pollination potential",
+    "Crop pest potential"
+  ),
+  `Goal ID` = scores_site %>%  
+    select(butterfly_richness:abund_butterflies) %>% 
+    names(.),
+  `Type` = c(
+    "Integer, count",
+    "Integer, count",
+    "Continuous",
+    "Continuous",
+    "Continuous",
+    "Integer, count",
+    "Integer, percentage",
+    "Integer, percentage",
+    "Integer, count",
+    "Integer, count",
+    "Continuous",
+    "Integer, count",
+    "Integer, count",
+    "Continuous",
+    "Continuous",
+    "Continuous",
+    "Continuous"
+  ),
+    `Definition` = 
+    c("Total number of red list Lepidoptera species present per site.",
+      "Total number of red list plant species present per site.",
+      "Average threat category of red list Lepidoptera species present per site.",
+      "Average threat category of red list plant species present per site.",
+      "Total sum of Lepidoptera biomass (g) estimated from forewing length (FL) using the Allometric function y = a * x^b, where y = weight; x = FL; a and b allometric constants for butterfly families",
+      "Summed abundances per butterfly species, site, and region across all three surveys at each site",
+      "Average regional distribution range of butterfly species present per site.",
+      "Average regional distribution range of plant species present per site.",
+      "Total number (richness) of plant species in each site.",
+      "Total number (richness) of day active butterfly species per community (i.e. site).",
+      "Total number of species (richness) of both taxa combined and scaled for the maximum number of species per taxa per region.",
+      "Sum of plant-butterfly trophic interactions per species present at each site.",
+      "Sum of Lepidoptera species present in a community with unique trophic interactions (i.e. a butterfly interacting with one species of plant only).",
+      "Realized proportion of possible links per site.",
+      "z-score value of NODF nestedness index as implemented in the package bipartite (Dormann, Gruber, and Fründ 2008) which is the nestedness measure proposed by Almeida-Neto et al. (2008), correcting for matrix fill and matrix dimensions.",
+      "Total number of flowering crops that the Lepidoptera species present in a community can pollinate from the total regional pool of commercial crops.",
+      "Total number of Lepidoptera species present in a community, for which their larvae are considered crop pests."
+      ),
+  `Ecological-level/ Conservation goal grouping` = 
+    c(
+      rep("Population/Traditional Species Conservation", 6),
+      rep("Population/Regional Distribution Range",2),
+      rep("Community/Traditional Species Conservation", 3),
+      rep("Community/Network indicators",4),
+      rep("Ecosystem/(regulating) Ecosystem Services", 2)
+    )) %>%
+  # Send to 'kable' for formatting as a table
+  kable(booktabs = TRUE) %>% 
+  kable_styling(font_size = 6)
+```
+
+# Data Exploration
+
+We could divide predictors of interest in three broad categories:
+
+**Landscape-level land use predictors:**
+
+-   18148_2: at 1000 m from the centroid of the EP [@steckel2014], percentage in the landscape of:
+    -   arable land
+    -   forests
+    -   woodlands: low-density forest forming open habitats with plenty of sunlight and limited shade. Woodlands may support an understory of shrubs and herbaceous plants including grasses (according to [eLTER Vocabularies](https://vocabs.lter-europe.net/envthes/en/page/53)).
+    -   grasslands: intensively managed pastures and meadows
+    -   semi-natural: habitats of extensive land use, such as extensively managed meadows, marshland, shrub land, hedges (\>5 m width), calcareous grasslands and orchards
+    -   roads
+    -   urban areas
+    -   water bodies
+
+**Field-level land use predictors:**
+
+-   LUI. Obtained using the LUI calculation tool from BExIS using the following parameters: default component set, standardised, regional, over years 2006-2008, for EPs.
+
+-   Mowing timing [@vogt2019]
+
+**Soil characteristics:**
+
+-   **20826_6** ⇒ EP_PlotID, Exploratory, Landuse, ActivePlot, RW, HW, SoilTypeWRB, Elevation, Slope
+
+-   **31018_5**: Topographic Wetness Index (TWI, soil moisture, @sørensen2006, [Soil.pH](http://Soil.pH), Soil.clay.content, Soil.sand.content, soil depth.
+
+```{r}
+#| include: true
+sites_orig <- sites
+```
+
+## Appendix A1: Multi-Correlation of responses
+
+### Pairwise correlations
+
+```{r, fig.width=9, fig.height=7}
+#| label: fig-A18
+#| fig-cap: "Pairwise correlations responses, ALB"
+
+# Pairwise comparison using cor() and corrplot()
+
+corrM_ALB <-
+  scores_site %>% 
+  filter(region == "ALB") %>% 
+  select(butterfly_richness:abund_butterflies) %>% 
+  cor(method = "spearman", use = 'pairwise.complete.obs')
+
+par(mfrow = c(1,1))
+corrplot(corrM_ALB, 
+         p.mat = cor.mtest(corrM_ALB, conf.level = 0.95)$p, # add n.s.
+         method = "number", 
+         type = "lower", 
+         diag = F,
+         mar = c(0,0,2,0), # correct margins
+         title = "Spearman correlations of responses - ALB",
+         number.cex = 0.6, # adjust text size of numbers
+         tl.cex	= 0.7,
+         tl.col = "black")
+```
+
+```{r, fig.width=9, fig.height=7}
+#| label: fig-A19
+#| fig-cap: "Pairwise correlations responses, SCH"
+
+corrM_SCH <-
+  scores_site %>% 
+  filter(region == "SCH") %>% 
+  select(butterfly_richness:abund_butterflies, 
+         -c(red_list_butterflies:threat_plants)) %>% 
+  cor(method = "spearman", use = 'pairwise.complete.obs')
+
+corrplot(corrM_SCH, 
+         p.mat = cor.mtest(corrM_SCH, conf.level = 0.95)$p, # add n.s.
+         method = "number", 
+         type = "lower", 
+         diag = F,
+         mar = c(0,0,2,0), # correct margins
+         title = "Spearman correlations of responses - SCH",
+        number.cex = 0.6, # adjust text size of numbers
+         tl.cex	= 0.7,
+         tl.col = "black")
+```
+
+Check relationship biomass_lepi \~ abund_butterflies to check validity of biomass approximations using Forewing Lenght.
+
+```{r}
+mod_ALB <- lm(biomass_lepi ~ abund_butterflies,
+          data = scores_site,
+          subset = region == "ALB")
+summary(mod_ALB)
+
+mod_SCH <- lm(biomass_lepi ~ abund_butterflies,
+          data = scores_site,
+          subset = region == "SCH")
+summary(mod_SCH)
+
+scores_site %>% 
+ggplot(aes(y = biomass_lepi, x = abund_butterflies, 
+           color = region)) +
+  geom_point() + 
+  geom_smooth(method = "lm") + 
+  labs(title = "Biomass vs. Abundance of Lepidoptera",
+       x = "Abundance butterflies (sum over 3 surveys)",
+       y = "Biomass butterflies per site (g)")
+```
+
+Conclusion: almost perfect correlation. Therefore, we use the raw butterfly abundance (abund_butterflies) instead of butterfly biomass.
+
+## Appendix A2: Landscape composition predictors
+
+The main landscape variables of interest are arable land and forest/woodlands. Woodland and Forest were joined (summed up). But lets check all landscape variables.
+
+```{r}
+#| include: true
+sites <- sites %>% 
+  mutate(forest.wood.1000 = forest.1000 + woodland.1000)
+```
+
+**Check distributions**
+
+```{r}
+#| label: fig-A1
+#| fig-cap: "Distribution of variables"
+sites %>% 
+  select(arable.1000:forest.wood.1000) %>% 
+  pivot_longer(
+    c(arable.1000,
+      semi.natural.1000,
+      grassland.1000,
+      water.1000, 
+      urban.1000,
+      roads.1000,
+      forest.wood.1000)) %>%
+  ggplot(aes(x = value)) +
+  # specify a function for calculating binwidth along variables' ranges
+  geom_histogram(color = "black",
+                 alpha = 0.2,
+                 binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3))) +
+  facet_wrap( ~ name, scales = "free") 
+```
+
+**Conclusions:**
+
+-   Based on this, we should consider transforming semi-natural because of the gap in the x-axis and urban because of the shape of the distribution.
+
+```{r}
+sites <- sites %>% 
+  mutate(
+    log_semi.natural.1000 = log10(semi.natural.1000 + 1),
+    log_urban.1000 = log10(urban.1000 + 1))
+```
+
+**Check correlations**
+
+Including variables of interest, transformed variables and the whole range of other landscape variables for comparison.
+
+```{r, fig.width=9, fig.height=7}
+#| label: fig-A2
+#| fig-cap: "Pearson correlations ALB, landscape predictors"
+
+# Pairwise comparison using cor() and corrplot()
+
+corrM_ALB <-
+  sites %>% 
+  filter(region == "ALB") %>% 
+  select(
+    arable.1000,
+    grassland.1000,
+    semi.natural.1000,
+    log_semi.natural.1000,
+    roads.1000,
+    urban.1000,
+    water.1000,
+    log_urban.1000,
+    forest.wood.1000
+    ) %>% 
+  cor(method = "pearson", use = 'pairwise.complete.obs')
+
+corrplot(corrM_ALB, 
+         p.mat = cor.mtest(corrM_ALB, conf.level = 0.95)$p, # add n.s.
+         method = "number", 
+         type = "lower", 
+         diag = F,
+         mar = c(0,0,2,0), # correct margins
+         title = "Landscape-level land use predictors - ALB",
+         number.cex = 1, # adjust text size of numbers
+         tl.cex	= 1,
+         tl.col = "black")
+```
+
+```{r, fig.width=9, fig.height=7}
+#| label: fig-A3
+#| fig-cap: "Pearson correlations SCH"
+
+corrM_SCH <-
+  sites %>% 
+  filter(region == "SCH") %>% 
+  select(
+    arable.1000,
+    grassland.1000,
+    semi.natural.1000,
+    log_semi.natural.1000,
+    roads.1000,
+    urban.1000, 
+    water.1000,
+    log_urban.1000,
+    forest.wood.1000
+  ) %>% 
+  cor(method = "pearson", use = 'pairwise.complete.obs')
+
+corrplot(corrM_SCH, 
+         p.mat = cor.mtest(corrM_SCH, conf.level = 0.95)$p, # add n.s.
+         method = "number", 
+         type = "lower", 
+         diag = F,
+         mar = c(0,0,2,0), # correct margins
+         title = "Landscape-level land use predictors - SCH",
+         number.cex = 1, # adjust text size of numbers
+         tl.cex	= 1,
+         tl.col = "black")
+```
+
+**Conclusions:**
+
+-   In ALB, arable land and forest/woodland, semi natural and grassland, and forest/woodland and urban are all negatively correlated.
+
+-   In SCH, forest/woodland is negatively correlated with arable land, grasslands, and positively correlated with water bodies.
+
+-   Based on this, we should probably pick arable instead of forest/woodland, but discuss accordingly.
+
+## Appendix A3: Field management predictors
+
+Extract meaningful information from mowing dates: calculate the Julian day (day of the year or DOY) of the first mowing event of the year per site within the region using `lubridate::yday()`
+
+```{r}
+# create a new variable 
+sites <- sites %>% 
+  mutate(year_days_mow1 = 
+           if_else(condition = !is.na(datemowing1), 
+                   true = yday(datemowing1), 
+                   false = NA))
+```
+
+**Check distribution of LUI, LUI components and the day of the first mow within the year per region**
+
+ALB
+
+```{r}
+#| label: fig-A4
+#| fig-cap: "Histograms LUI, LUI components and the day of the first mow, ALB"
+sites %>% 
+  filter(region == "ALB") %>%
+  select(lui, year_days_mow1, mowing, fertilization, grazing) %>% 
+  pivot_longer(
+    c(lui, year_days_mow1, mowing, fertilization, grazing)) %>%
+  ggplot(aes(x = value)) +
+  # specify a function for calculating binwidth along variables' ranges
+  geom_histogram(color = "black",
+                 alpha = 0.2,
+                 binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3))) +
+  facet_wrap( ~ name, scales = "free") + 
+  labs(title = "Histograms field-level land use management predictors ALB")
+```
+
+**Conclusion:**
+
+-   we could consider log transform year_days_mow1 in SCH because of the big gap
+
+SCH
+
+```{r}
+#| label: fig-A5
+#| fig-cap: "Histogram LUI, LUI components and the day of the first mow, SCH"
+sites %>% 
+  filter(region == "SCH") %>%
+  select(lui, year_days_mow1, mowing, fertilization, grazing) %>% 
+  pivot_longer(
+    c(lui, year_days_mow1, mowing, fertilization, grazing)) %>%
+  ggplot(aes(x = value)) +
+  # specify a function for calculating binwidth along variables' ranges
+  geom_histogram(color = "black",
+                 alpha = 0.2,
+                 binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3))) +
+  facet_wrap( ~ name, scales = "free") + 
+  labs(title = "Histograms field-level land use management predictors SCH")
+```
+
+**Number of sites** per variable
+
+```{r}
+#| label: tbl-A1
+#| tbl-cap: "No. of sites per variable"
+
+sites %>% summarise(n = n(), 
+                    non_NAs = sum(!is.na(year_days_mow1)),
+                    NAs = sum(is.na(year_days_mow1)), 
+                    .by = region) %>% 
+  kable(booktabs = TRUE) 
+```
+
+**Check correlations**
+
+Because of the non completely normal distribution of SCH, we should use Spearman correlation.
+
+```{r}
+#| label: fig-A6
+#| fig-cap: "Spearman correlation plot of field-level predictors ALB"
+
+# Pairwise comparison using cor() and corrplot()
+
+corrM_ALB <-
+  sites %>% 
+  filter(region == "ALB") %>% 
+  select(
+    LUI = lui, 
+    Mowing = mowing,
+    Grazing = grazing,
+    Fertilisation = fertilization,
+    Timing = year_days_mow1 
+    ) %>% 
+  cor(method = "spearman", use = 'pairwise.complete.obs') 
+  
+corrplot(corrM_ALB, 
+         p.mat = cor.mtest(corrM_ALB, conf.level = 0.95)$p, # add n.s.
+         method = "number", 
+         type = "lower", 
+         diag = F,
+         mar = c(0,0,2,0), # correct margins
+         title = "Field-level land use predictors - ALB",
+         number.cex = 1, # adjust text size of numbers
+         tl.cex	= 1,
+         tl.col = "black")
+```
+
+```{r}
+#| label: fig-A7
+#| fig-cap: "Spearman correlation plot of field-level predictors SCH"
+
+corrM_SCH <-
+  sites %>% 
+  filter(region == "SCH") %>% 
+  select(
+    LUI = lui, 
+    Mowing = mowing,
+    Grazing = grazing,
+    Fertilisation = fertilization,
+    Timing = year_days_mow1
+  ) %>% 
+  cor(method = "spearman", use = 'pairwise.complete.obs')
+
+corrplot(corrM_SCH, 
+         p.mat = cor.mtest(corrM_SCH, conf.level = 0.95)$p, # add n.s.
+         method = "number", 
+         type = "lower", 
+         diag = F,
+         mar = c(0,0,2,0), # correct margins
+         title = "Field-level land use predictors - SCH",
+         number.cex = 1, # adjust text size of numbers
+         tl.cex	= 1,
+         tl.col = "black")
+```
+
+```{r}
+#| label: fig-A8
+#| fig-cap: "Scatter plot of field-level predictors per region"
+
+sites %>% 
+  ggplot() +
+  geom_point(aes(x = lui,
+                 y = year_days_mow1,
+                 col = "LUI")) + 
+  geom_point(aes(x = mowing,
+                 y = year_days_mow1,
+                 col = "Mowing")) + 
+  geom_smooth(aes(x = lui,
+                 y = year_days_mow1,
+                 col = "LUI"),
+              method = "lm",
+              se = TRUE) + 
+  geom_smooth(aes(x = mowing,
+                 y = year_days_mow1,
+                 col = "Mowing"),
+              method = "lm", 
+              se = TRUE) + 
+  scale_color_manual(
+    name = "",
+    values = c("LUI" = "chocolate",
+               "Mowing" = "slateblue")) +
+  facet_wrap(~region) + 
+  labs(
+    x = "LUI",
+    y = "Timing of the first mowing event (DOY)"
+  )
+```
+
+The Spearman correlation and the scatterplot indicate a negative relationship between LUI and the day of the year of the first mowing event. Extensive grassland sites are characterized by species with slower biomass growth rates, which do not require frequent mowing, in contrast to intensively used grasslands. Fast-growing species dominate the latter, but their fodder quality deteriorates if not mown early enough due to increased woody growth [@leclech2019]. Therefore, both LUI (mowing frequency) and the local plant community influence the timing of mowing. For butterflies, LUI influences mowing timing, but mowing timing directly influence the local butterfly community, hence the relationship is the other way around. In the case of butterfly community as a response, mowing timing would be a mediator, and we can decide if to control for it or not.
+
+## Appendix A4: Soil properties
+
+To account for differences in soil characteristics between the sites, we will create a PCA for all soil covariates, and then use the main principal components to explain as much as variations as possible. We will include: pH, texture (sand and clay), soil depth, soil type and soil moisture (TWI).
+
+**Check soil variables without soil type**
+
+```{r}
+#| label: fig-A9
+#| fig-cap: "Correlation plot soil variables"
+
+corrS <- sites %>% 
+  dplyr::select(ph,
+                twi,
+                soil_depth,
+                clay, 
+                sand) %>% 
+  cor(method = "pearson", use = 'pairwise.complete.obs')
+
+corrplot::corrplot(corrS, 
+                   p.mat = cor.mtest(corrS, conf.level = 0.95)$p, # add n.s.)
+                   method = "number", 
+                   type = "lower", 
+                   bg = "white", 
+                   diag = F, 
+                   tl.col = "black",
+                   number.cex = 1)
+```
+
+```{r}
+#| echo: false
+
+# create a subset of numeric variables
+vars <- sites %>% dplyr::select(ph,
+                                twi,
+                                soil_depth,
+                                clay,
+                                sand) 
+```
+
+**Create a dummy variable of soil type because PCA can not fit categorical data which have \> 2 categories.**
+
+```{r}
+#| echo: false
+sites <- sites %>% 
+  mutate(
+    epid = epid,
+    leptosol = if_else(soiltypewrb == "Leptosol", 1, 0),
+    cambisol = if_else(soiltypewrb == "Cambisol", 1, 0),
+    gleysol = if_else(soiltypewrb == "Gleysol", 1, 0),
+    histosol = if_else(soiltypewrb == "Histosol", 1, 0),
+    luvisol = if_else(soiltypewrb == "Luvisol", 1, 0),
+    albeluvisol = if_else(soiltypewrb == "Albeluvisol", 1, 0)
+  )  
+```
+
+```{r}
+pca_soil <- prcomp(
+  ~ ph + twi + soil_depth + clay + sand + 
+    leptosol + cambisol + gleysol + histosol + luvisol + albeluvisol,
+  data = sites,
+  scale. = TRUE, # variables scaled to have unit variance
+  center = TRUE # variables shifted to be zero centered
+) 
+summary(pca_soil) 
+```
+
+**Run the PCA without soil type: both regions ALB and SCH**
+
+```{r}
+pca_soil <- prcomp(
+  ~ ph + twi + soil_depth + clay + sand,
+  data = sites,
+  scale. = TRUE, # variables scaled to have unit variance
+  center = TRUE # variables shifted to be zero centered
+)  
+summary(pca_soil) 
+```
+
+Soil type classification of the World Reference Base for Soil Resources use some of the parameters discussed like soil texture, ph, among others so adding soil type might add some repetitive information. By adding soil type into the PCA we should then use 5 principal components to account for 88% of the variance in the soil parameters. On the other side, if we do not consider soil type, we only need 2 principal components to account for 85% of the variance. Given the limitations of our number of observations, we prefer to use only 2 PCs. We should run the PCA per region because we will run our model per region.
+
+**Run the PCA without soil type: REGION ALB ONLY**
+
+```{r}
+pca_soil_alb <- prcomp(
+  ~ ph + twi + soil_depth + clay + sand,
+  data = sites,
+  subset = sites$region == "ALB",
+  scale. = TRUE, # variables scaled to have unit variance
+  center = TRUE # variables shifted to be zero centered
+)  
+summary(pca_soil_alb) 
+```
+
+Conclusion: the first two PCs explain only about 62% of the variation, the first three PCs explain together 79% of the variation. Given the limitation of number of obs. (n = 46), we could go for only 2 PCs.
+
+**Visualise PCA biplot**
+
+```{r}
+#| label: fig-A10
+#| fig-cap: "PCA biplot soil variables, ALB"
+
+par(mfrow = c(1,1))
+fviz_pca_biplot(pca_soil_alb, 
+                axes = c(1,2), # include only the first two PCs
+                repel = TRUE,
+                pointsize = 3,
+                label = "var",
+                pointshape = 21,
+                # fill.ind = sites$region,
+                col.ind = "black",
+                col.var = "red", 
+                arrowsize = 0.6, 
+                labelsize = 5, 
+                addEllipses = TRUE,
+                ellipse.level = 0.95,
+                title = "PCA - Biplot region ALB",
+                mean.point = F)
+```
+
+**Get insights into the PCs**
+
+```{r}
+#| label: fig-A11
+#| fig-cap: "PC insights, soil proprties ALB"
+
+par(mfrow = c(1,2))
+screeplot(pca_soil_alb)
+screeplot(pca_soil_alb, type="lines")
+summary(pca_soil_alb)
+```
+
+**Visualise loadings of each soil variable on PC 1 and 2**
+
+```{r}
+#| label: fig-A12
+#| fig-cap: "Loadings of each soil variable on PC1 and PC2, ALB"
+
+# explore how each predictor's loads onto each component
+lattice::levelplot(t(
+  pca_soil_alb$rotation[, c(1:2)]),
+  scales = list(x = list(rot = 45)),
+  xlab = "",
+  ylab = ""
+)
+```
+
+```{r}
+#| echo: false
+# extract PCs 
+PCs_alb <- 
+  bind_cols(
+  sites %>% 
+    filter(region == "ALB") %>% 
+    select(epid), 
+  pca_soil_alb$x %>% 
+    as.data.frame())
+```
+
+**Run the PCA without soil type: REGION SCH ONLY**
+
+```{r}
+#| label: tbl-A2
+#| tbl-cap: "PCA soil proprties ALB"
+
+pca_soil_sch <- prcomp(
+  ~ ph + twi + soil_depth + clay + sand,
+  data = sites,
+  subset = sites$region == "SCH",
+  scale. = TRUE, # variables scaled to have unit variance
+  center = TRUE # variables shifted to be zero centered
+) 
+summary(pca_soil_sch) 
+```
+
+Conclusion: the first two PCs explain only about 72% of the variation, the first three PCs explain together 87% of the variation. Given the limitation of number of obs. (n = 43), we could go for only 2 PCs.
+
+**Visualise PCA biplot**
+
+```{r}
+#| label: fig-A13
+#| fig-cap: "PCA biplot soil variables, SCH"
+
+par(mfrow = c(1,1))
+fviz_pca_biplot(pca_soil_sch, 
+                axes = c(1,2), # include only the first two PCs
+                repel = TRUE,
+                pointsize = 3,
+                label = "var",
+                pointshape = 21,
+                # fill.ind = sites$region,
+                col.ind = "black",
+                col.var = "red", 
+                arrowsize = 0.6, 
+                labelsize = 5, 
+                addEllipses = TRUE,
+                ellipse.level = 0.95,
+                title = "PCA - Biplot region SCH",
+                mean.point = F)
+```
+
+**Get insights into the PCs**
+
+```{r}
+#| label: fig-A14
+#| fig-cap: "PC insights, soil proprties SCH"
+par(mfrow = c(1,2))
+screeplot(pca_soil_sch)
+screeplot(pca_soil_sch, type="lines")
+summary(pca_soil_sch)
+```
+
+**Visualise loadings of each soil variable on PC 1 and 2**
+
+```{r}
+#| label: fig-A15
+#| fig-cap: "Loadings of each soil variable on PC1 and PC2, SCH"
+
+# explore how each predictor's loads onto each component
+lattice::levelplot(t(
+  pca_soil_sch$rotation[, c(1:2)]),
+  scales = list(x = list(rot = 45)),
+  xlab = "",
+  ylab = ""
+)
+```
+
+```{r}
+#| echo: false
+# extract PCs
+PCs_sch <-
+  bind_cols(
+  sites %>% 
+    filter(region == "SCH") %>% 
+    select(epid), 
+  pca_soil_sch$x %>% 
+    as.data.frame())
+```
+
+```{r}
+#| echo: false
+# add PCs to df
+
+# rename PCs of the PCS with both regions combined as PC#_comb
+sites <- sites %>% 
+  left_join(
+    #first combine ALB and SCH
+    bind_rows(PCs_alb, PCs_sch),
+    by = "epid") 
+```
+
+## Appendix A5: Multi-Correlation of predictors
+
+### Pairwise correlations
+
+**Create a subset with the predictors of interest and run a final correlogram.**
+
+```{r}
+# join predictors to scores
+scores <- scores_site %>% 
+  left_join(
+    sites %>%
+      select(
+        epid,
+        region,
+        RW = rw,
+        HW = hw,
+        SizeUnit = size_unit,
+        Forest = forest.wood.1000,
+        Arable = arable.1000,
+        LUI = lui,
+        Fert = fertilization,
+        Grazing = grazing,
+        Mowing = mowing,
+        Timing = year_days_mow1,
+        # PC1_comb, 
+        # PC2_comb,
+        PC1,
+        PC2
+      ),
+    by = c("epid", "region")
+  ) %>% 
+  rename(
+    EPID = epid,
+    Region = region
+  ) %>% 
+  as.data.frame()
+```
+
+```{r}
+#| echo: false
+write_csv(scores, "data/processed/scores_multivariate.csv")
+```
+
+```{r, fig.width=9, fig.height=7}
+#| label: fig-A16
+#| fig-cap: "Correlation plot selected predictor variables, ALB"
+
+# Pairwise comparison using cor() and corrplot()
+
+corrM_ALB <-
+  scores %>% 
+  filter(Region == "ALB") %>% 
+  select(
+    Forest,
+    Arable,
+    LUI,
+    Mowing,
+    Fert,
+    Grazing,
+    Timing,
+    PC1,
+    PC2
+    ) %>% 
+  cor(method = "pearson", use = 'pairwise.complete.obs')
+
+par(mfrow = c(1,1))
+corrplot(corrM_ALB, 
+         p.mat = cor.mtest(corrM_ALB, conf.level = 0.95)$p, # add n.s.
+         method = "number", 
+         type = "lower", 
+         diag = F,
+         mar = c(0,0,2,0), # correct margins
+         title = "Pearson correlations of selected predictors - ALB",
+         number.cex = 1, # adjust text size of numbers
+         tl.cex	= 1,
+         tl.col = "black")
+```
+
+```{r, fig.width=9, fig.height=7}
+#| label: fig-A17
+#| fig-cap: "Correlation plot selected predictor variables, SCH"
+
+corrM_SCH <-
+  scores %>% 
+  filter(Region == "SCH") %>% 
+  select(
+    Forest,
+    Arable,
+    LUI,
+    Mowing,
+    Fert,
+    Grazing,
+    Timing,
+    PC1,
+    PC2
+  ) %>% 
+  cor(method = "pearson", use = 'pairwise.complete.obs')
+
+corrplot(corrM_SCH, 
+         p.mat = cor.mtest(corrM_SCH, conf.level = 0.95)$p, # add n.s.
+         method = "number", 
+         type = "lower", 
+         diag = F,
+         mar = c(0,0,2,0), # correct margins
+         title = "Pearson correlations of selected predictors - SCH",
+         number.cex = 1, # adjust text size of numbers
+         tl.cex	= 1,
+         tl.col = "black")
+```
+
+### VIF of data using `usdm::vif`
+
+```{r}
+#| echo: false
+# create a vector with numerical vars
+vars <-
+  scores %>% 
+  select(Forest, Arable, Mowing, Grazing, Fert, Timing, PC1, PC2) %>% 
+  names()
+```
+
+**ALB** Model 1
+
+```{r}
+#| label: tbl-A3
+#| tbl-cap: "VIF predictors, mod 1 ALB"
+
+scores %>% 
+  filter(Region == "ALB") %>% 
+  select(all_of(vars), -Timing) %>% 
+  usdm::vif() %>% 
+  # Send to 'kable' for formatting as a table
+  kable(booktabs = TRUE) 
+```
+
+ALB Model 2: timing
+
+```{r}
+#| label: tbl-A4
+#| tbl-cap: "VIF predictors, mod 2, ALB"
+
+scores %>% 
+  filter(Region == "ALB" & !is.na(Timing)) %>% 
+  select(all_of(vars), -Fert, -Grazing, -Mowing) %>% 
+  usdm::vif() %>% 
+  # Send to 'kable' for formatting as a table
+  kable(booktabs = TRUE) 
+```
+
+**SCH Model 1**
+
+```{r}
+#| label: tbl-A5
+#| tbl-cap: "VIF predictors, mod 1, SCH"
+
+scores %>% 
+  filter(Region == "SCH") %>% 
+  select(all_of(vars), -Timing) %>% 
+  usdm::vif() %>% 
+  # Send to 'kable' for formatting as a table
+  kable(booktabs = TRUE) 
+```
+
+ALB Model 2: timing
+
+```{r}
+#| label: tbl-A6
+#| tbl-cap: "VIF predictors, mod 2, SCH"
+
+scores %>% 
+  filter(Region == "SCH" & !is.na(Timing)) %>% 
+  select(all_of(vars), -Fert, -Grazing, -Mowing) %>% 
+  usdm::vif() %>% 
+  # Send to 'kable' for formatting as a table
+  kable(booktabs = TRUE) 
+```
+
+**Conclusions:**
+
+Based on the VIF with a threshold of 3 (the most conservative threshold), we should avoid using Arable in region ALB when we include Timing, and Forest in region SCH (with or without timing) because they is some rather strong correlation. But since there are other authors who recommend 5 as threshold we will include it in the models anyway and inspect later on with VIF on the residuals after fitting the model which is more precise.
+
+## Appendix A6: Outliers
+
+**ALB**
+
+```{r}
+#| label: fig-A20
+#| fig-cap: "Boxplot of predictor variables ALB"
+
+# make boxplot of each variable
+
+scores %>% 
+  filter(Region == "ALB") %>% 
+  pivot_longer(all_of(vars)) %>% 
+  ggplot() +
+  geom_boxplot(aes(x = name, y = value)) +
+  facet_wrap(~name, scales = 'free') # set scales free to allow independent plot axes 
+```
+
+**SCH**
+
+```{r}
+#| label: fig-A21
+#| fig-cap: "Boxplot of predictor variables SCH"
+
+# make boxplot of each variable
+
+scores %>% 
+  filter(Region == "SCH") %>% 
+  pivot_longer(all_of(vars)) %>% 
+  ggplot() +
+  geom_boxplot(aes(x = name, y = value)) +
+  facet_wrap(~name, scales = 'free') # set scales free to allow independent plot axes 
+```
+
+**Conclusions:**
+
+-   in ALB, a few outliers in Arable, PC1 and PC2
+-   in SCH, a few outliers in Timing and PC1
+
+# Data structure: selected predictors
+
+```{r}
+#| label: tbl-A10
+#| tbl-cap: "Overview of independent variables"
+
+tibble(
+  `Predictor variables` = scores %>% 
+    select(Forest:last_col(), -LUI) %>% 
+    names(.),
+  `Definition` = 
+    c(
+      "Percentage of forest plus woodlands in the landscape (radius 1000 m, BExIS dataset 18148 v2)",
+      "Percentage of arable land in the landscape (radius 1000 m, BExIS dataset 18148 v2)",
+      "Fertilisation level, mean 2006-2008",
+      "Grazing intensity, mean 2006-2008",
+      "Mowing frequency, mean 2006-2008",
+      "Day of the first mowing event of the year ([@vogt2019])",
+      "First Principal Component of the soil variables (BExIS dataset 31018 v5)",
+      "Second Principal Component of the soil variables (BExIS dataset 31018 v5)"
+    )) %>% 
+  # Send to 'kable' for formatting as a table
+  kable(booktabs = TRUE) 
+```
+
+**Prepare the responses**
+
+-   Check how many NA in Nestedness
+
+```{r}
+#| label: tbl-A11
+#| tbl-cap: "count of NAs in variable Nestedness"
+
+scores %>% 
+  group_by(Region) %>% 
+  summarise(n = n(), 
+            NA_nestedness = sum(is.na(nestedness))) %>% 
+  # format it with Kable   
+kable(booktabs = TRUE) 
+```
+
+Conclusion: we keep nestedness even though it has some NAs. Gower can handle them by omission.
+
+-   Create subsets of responses for each region and model.
+
+```{r}
+#| output: false 
+# extract names by regions 
+
+resps_ALB <- scores %>% 
+  select(EPID, butterfly_richness:abund_butterflies, 
+         -c(red_list_plants, 
+            threat_plants, 
+            reg_dist_plants, 
+            unique_trophic_interactions, 
+            biomass_lepi
+          )
+         ) %>% names()
+
+resps_SCH <- scores %>%
+  select(
+    EPID,
+    butterfly_richness:abund_butterflies,
+    -c(
+      red_list_plants,
+      threat_plants,
+      reg_dist_plants,
+      unique_trophic_interactions,
+      biomass_lepi
+    )
+  ) %>% names()
+
+# Create subsets of the responses
+
+resp_m1_ALB <- scores %>% 
+  filter(Region == "ALB") %>% 
+  select(all_of(resps_ALB)) %>% 
+  column_to_rownames("EPID") %>% 
+  as.matrix() 
+resp_m1_ALB
+
+resp_m2_ALB <- scores %>% 
+  filter(Region == "ALB" & !is.na(Timing)) %>% 
+  select(all_of(resps_ALB)) %>% 
+  column_to_rownames("EPID") %>% 
+  as.matrix() 
+resp_m2_ALB
+
+resp_m1_SCH <- scores %>% 
+  filter(Region == "SCH") %>% 
+  select(all_of(resps_SCH)) %>% 
+  column_to_rownames("EPID") %>% 
+  as.matrix()
+resp_m1_SCH
+
+resp_m2_SCH <- scores %>% 
+  filter(Region == "SCH" & !is.na(Timing)) %>% 
+  select(all_of(resps_SCH)) %>% 
+  column_to_rownames("EPID") %>% 
+  as.matrix()
+resp_m2_SCH
+```
+
+**Prepare the predictors**
+
+```{r}
+#| output: false 
+
+# Create subsets of the predictors for each model and region = 4 subsets
+
+preds_m1_ALB <- scores %>% 
+  filter(Region == "ALB") %>% 
+  select(EPID, all_of(vars), -LUI, -Timing) %>% 
+  column_to_rownames("EPID") %>% 
+  as.matrix() 
+
+preds_m2_ALB <- scores %>% 
+  filter(Region == "ALB" & !is.na(Timing)) %>% 
+  select(EPID, all_of(vars), -LUI, -Grazing, -Fert, -Mowing) %>% 
+  column_to_rownames("EPID") %>% 
+  as.matrix() 
+
+preds_m1_SCH <- scores %>% 
+  filter(Region == "SCH") %>% 
+  select(EPID, all_of(vars), -LUI, -Timing) %>% 
+  column_to_rownames("EPID") %>% 
+  as.matrix() 
+
+preds_m2_SCH <- scores %>% 
+  filter(Region == "SCH" & !is.na(Timing)) %>% 
+  select(EPID, all_of(vars), -LUI, -Grazing, -Fert, -Mowing) %>% 
+  column_to_rownames("EPID") %>% 
+  as.matrix()
+
+rm(scores_site, PCs_alb, PCs_sch, pca_soil_alb, pca_soil_sch)
+
+# check dimensions of predictors and responses
+
+dim(preds_m1_ALB)[1] == dim(resp_m1_ALB)[1]
+dim(preds_m2_ALB)[1] == dim(resp_m2_ALB)[1]
+dim(preds_m1_SCH)[1] == dim(resp_m1_SCH)[1]
+dim(preds_m2_SCH)[1] == dim(resp_m2_SCH)[1]
+
+stopifnot(row.names(preds_m1_ALB) == row.names(resp_m1_ALB)) 
+stopifnot(row.names(preds_m2_ALB) == row.names(resp_m2_ALB))
+stopifnot(row.names(preds_m1_SCH) == row.names(resp_m1_SCH))
+stopifnot(row.names(preds_m2_SCH) == row.names(resp_m2_SCH))
+# All good
+
+dim(preds_m1_ALB)
+dim(resp_m1_ALB)
+dim(preds_m2_ALB)
+dim(resp_m2_ALB)
+dim(preds_m1_SCH)
+dim(resp_m1_SCH)
+dim(preds_m2_SCH)
+dim(resp_m2_SCH)
+
+# Finally check units of predictors, if too big they should be standardised i.e. scaled to zero mean and unit variance
+list(preds_m1_ALB, preds_m2_ALB, preds_m1_SCH, preds_m2_SCH) %>% map(summary)
+# Conclusion: we have a wide range of values for variable timing in model 2, and for  therefore we should stantardize the variable, all others can stay the same because they are in similar scales. 
+
+preds_m1_ALB_std <- decostand(preds_m1_ALB, method = "standardize")
+preds_m2_ALB_std <- decostand(preds_m2_ALB, method = "standardize")
+preds_m1_SCH_std <- decostand(preds_m1_SCH, method = "standardize")
+preds_m2_SCH_std <- decostand(preds_m2_SCH, method = "standardize")
+
+list(preds_m1_ALB_std, preds_m2_ALB_std, preds_m1_SCH_std, preds_m2_SCH_std) %>% map(summary)
+```
+
+**Check correlation troph_int with connectance**
+
+```{r}
+#| label: fig-A22
+#| fig-cap: "Scatterplot trophic interactions with connectance, ALB"
+
+# ALB
+scores %>% 
+  filter(Region == "ALB") %>% 
+ggstatsplot::ggscatterstats(data = ., x = connectance, y = trophic_interactions,
+                            type = "parametric",
+                            title = "ALB")
+```
+
+```{r}
+#| label: fig-A23
+#| fig-cap: "Scatterplot trophic interactions with connectance, SCH"
+
+# SCH
+scores %>% 
+  filter(Region == "SCH") %>% 
+ggstatsplot::ggscatterstats(data = ., x = connectance, y = trophic_interactions, 
+                            type = "parametric",
+                            title = "SCH")
+```
+
+# Data Analysis and Modelling
+
+We will fit two types of models: all models include soil and landscape-level predictors, but some models including mowing and mowing timing, and models including LUI. We will fit one unconstrained and one constrained model for each model type and region, hence total 8 models in total. See @fig-models
+
+![Methodology used for the analysis.](resources-troph-cost/paper-3-ecological/output/methodology_diagram.jpg){#fig-models fig-align="center"}
+
+## Appendix A7: Constrained ordinations (distLM/dbRDA) - Model 1
+
+### ALB, Model 1 (LUI components)
+
+Calculate distance matrix responses
+
+```{r}
+dists <- cluster::daisy(resp_m1_ALB, metric = "gower")
+```
+
+PERMANOVA with interaction between Forest and field-level management to test the H2: Is the effect of intense field management modulated by increased forest landscape composition?
+
+```{r}
+dbrda_result <- dbrda(
+  dists ~ Arable + Forest*Mowing + Forest*Grazing + Forest*Fert + PC1 + PC2,
+  data = as.data.frame(preds_m1_ALB),
+)
+
+set.seed(42) # For reproducibility
+
+anova.cca(
+  dbrda_result,
+  permutations = how(nperm = 9999),
+  model = "direct", # because we do not have partialised term
+  by = "margin" # Type III ANOVA: partial, Test term after accounting for all  other terms
+) %>% 
+  kable()
+```
+
+Conclusion: Interactions are not significant so we can remove them from model
+
+PERMANOVA with additive model. Marginal test for analysis and partitioning of sums of squares
+
+```{r}
+dbrda_result <- dbrda(
+  dists ~ Forest + Arable + Mowing + Grazing + Fert + PC1 + PC2,
+  data = as.data.frame(preds_m1_ALB),
+)
+
+set.seed(42) # For reproducibility
+
+summary(permustats(anova.cca(
+  dbrda_result,
+  permutations = how(nperm = 9999),
+  model = "direct", # because we do not have partialised term
+  by = "margin" # Type III ANOVA: partial, Test term after accounting for all  other terms
+)))
+
+# Calculate R^2
+vegan::RsquareAdj(dbrda_result) 
+
+# Check multiple correlation
+vif.cca(dbrda_result)
+```
+
+PERMANOVA with adonis2 to get summary table with partial R2 per term. This is identical to dbRDA() above but with the partial R2.
+
+```{r}
+set.seed(42) # For reproducibility
+
+pstat <- 
+  adonis2(
+    dists ~ Forest + Arable + Mowing + Grazing + Fert + PC1 + PC2,
+    data = as.data.frame(preds_m1_ALB),
+    permutations = how(nperm = 9999),
+    by = "margin")
+
+pstat %>% kable()
+
+pstat %>% write.csv("output/multivar_analysis/PERMANOVA_mod1_ALB.csv")
+
+# TODO Add species scores 
+# sppscores(dbrda_result) <- resp_m1_ALB
+
+pvals <- summary(permustats(pstat))
+
+# Get names of significant environmental variables (p ≤ 0.05)
+sig_vars <- names(pvals[[1]])[pvals$p <= 0.05]
+```
+
+visualise standardized effect sizes (SES)
+
+```{r}
+boxplot(permustats(pstat, scale = TRUE))
+```
+
+Conclusion: Mowing, Grazing and PC2 are significant. Model account for about 53% of variation in the response (adj R\^2).
+
+Visualize the dbRDA ordination
+
+```{r}
+#| label: fig-A24
+#| fig-cap: "Biplot dbRDA, model 1, ALB"
+
+# Get environmental predictors
+env_fit <- envfit(dbrda_result, preds_m1_ALB[, sig_vars], # predictors
+                  permutations = 0,
+                  choices=c(1,2),  
+                  display = "sites")
+env_fit
+
+## extract % explained by the first 2 axes
+perc <- round(100*(summary(dbrda_result)$cont$importance[2, 1:2]), 2)
+
+plot(dbrda_result, 
+     display = "sites",
+     scaling = "symmetric",
+     type = "n",
+     # main = "dbRDA (Gower), ALB, Model 1 (LUI components)", 
+     xlab = paste0("dbRDA1 (", perc[1], "%)"), 
+     ylab = paste0("dbRDA2 (", perc[2], "%)"));
+# Add points 
+points(dbrda_result, 
+       display = "sites", 
+       scaling = "symmetric", 
+       pch = 1, 
+       col = "chocolate")
+# Add enviromental vectors
+plot(env_fit, add = TRUE, col = "steelblue")
+```
+
+Surface plots for significant variables
+
+```{r}
+# Examine only significant variables 
+ordisurf(x = dbrda_result, y = as.data.frame(preds_m1_ALB)$Mowing, bubble = 5,
+         main = "Mowing, Mod 1, ALB",
+         xlab = paste0("dbRDA1 (", perc[1], "%)"), 
+         ylab = paste0("dbRDA2 (", perc[2], "%)"))
+ordisurf(x = dbrda_result, y = as.data.frame(preds_m1_ALB)$Grazing, bubble = 5,
+         main = "Grazing, Mod 1, ALB",
+         xlab = paste0("dbRDA1 (", perc[1], "%)"), 
+         ylab = paste0("dbRDA2 (", perc[2], "%)"))
+ordisurf(x = dbrda_result, y = as.data.frame(preds_m1_ALB)$PC2, bubble = 5, 
+         main = "PC2, Mod 1, ALB",
+         xlab = paste0("dbRDA1 (", perc[1], "%)"), 
+         ylab = paste0("dbRDA2 (", perc[2], "%)"))
+```
+
+Rerun analysis using standardized predictors to see if significant predictors hold
+
+```{r}
+dbrda_result <- dbrda(
+  dists ~ Forest + Arable + Mowing + Grazing + Fert + PC1 + PC2,
+  data = as.data.frame(preds_m1_ALB_std), #standardized predictors
+  add = FALSE, # Add a constant to the non-diagonal dissimilarities to avoid negative eigenvalues
+  sqrt.dist = FALSE # square roots of dissimilarities to avoid negative eigenvalues
+)
+dbrda_result
+
+# Calculate R^2
+vegan::RsquareAdj(dbrda_result)
+
+# Check multiple correlation
+vif.cca(dbrda_result)
+
+# Decompose inertia
+
+set.seed(42) # For reproducibility
+
+pstat <- permustats(anova.cca(
+  dbrda_result,
+  permutations = how(nperm = 9999),
+  model = "direct", # because we do not have partialised term
+  by = "margin" # Type III ANOVA: partial, Test term after accounting for all  other terms
+)) 
+summary(pstat)
+```
+
+Conclusion: no change in significant predictors.
+
+### SCH, Model 1 (LUI components)
+
+Calculate distance matrix responses
+
+```{r}
+dists <- cluster::daisy(resp_m1_SCH, metric = "gower")
+```
+
+PERMANOVA with interaction between Forest and field-level management to test the H2: Is the effect of intense field management modulated by increased forest landscape composition?
+
+```{r}
+dbrda_result <- dbrda(
+  dists ~ Arable + Forest*Mowing + Forest*Grazing + Forest*Fert + PC1 + PC2,
+  data = as.data.frame(preds_m1_SCH),
+)
+
+set.seed(42) # For reproducibility
+
+anova.cca(
+  dbrda_result,
+  permutations = how(nperm = 9999),
+  model = "direct", # because we do not have partialised term
+  by = "margin" # Type III ANOVA: partial, Test term after accounting for all  other terms
+) %>% 
+  kable()
+```
+
+Conclusion: Interactions are not significant so we can remove them from model
+
+PERMANOVA with additive model. Marginal test for analysis and partitioning of sums of squares
+
+```{r}
+dbrda_result <- dbrda(
+  dists ~ Forest + Arable + Mowing + Grazing + Fert + PC1 + PC2,
+  data = as.data.frame(preds_m1_SCH),
+)
+
+set.seed(42) # For reproducibility
+
+summary(permustats(anova.cca(
+  dbrda_result,
+  permutations = how(nperm = 9999),
+  model = "direct", # because we do not have partialised term
+  by = "margin" # Type III ANOVA: partial, Test term after accounting for all  other terms
+)))
+
+# Calculate R^2
+vegan::RsquareAdj(dbrda_result)
+
+# Check multiple correlation
+vif.cca(dbrda_result)
+```
+
+PERMANOVA with adonis2 to get summary table with partial R2 per term. This is identical to dbRDA() above but with the partial R2.
+
+```{r}
+set.seed(42) # For reproducibility
+
+pstat <- 
+  adonis2(
+    dists ~ Forest + Arable + Mowing + Grazing + Fert + PC1 + PC2,
+    data = as.data.frame(preds_m1_SCH),
+    permutations = how(nperm = 9999),
+    by = "margin")
+
+pstat %>% kable()
+
+pstat %>% write.csv("output/multivar_analysis/PERMANOVA_mod1_SCH.csv")
+
+# TODO Add species scores 
+# sppscores(dbrda_result) <- resp_m1_ALB
+
+pvals <- summary(permustats(pstat))
+
+# Get names of significant environmental variables (p ≤ 0.05)
+sig_vars <- names(pvals[[1]])[pvals$p <= 0.05]
+```
+
+Visualise standardized effect sizes (SES)
+
+```{r}
+boxplot(permustats(pstat, scale = TRUE))
+```
+
+Conclusion: Forest, Mowing, Grazing and Fertilisation are significant. Model account for about 18.4% of variation in the response (adj R\^2).
+
+Visualize the dbRDA ordination
+
+```{r}
+#| label: fig-A26
+#| fig-cap: "Biplot dbRDA, model 1, SCH"
+
+# Get environmental predictors
+env_fit <- envfit(ord = dbrda_result, # responses
+                  env = preds_m1_SCH[, sig_vars], # predictors
+                  permutations = 0,
+                  choices=c(1,2),  
+                  # scaling = ""
+                  display = "sites")
+env_fit
+
+## extract % explained by the first 2 axes
+perc <- round(100*(summary(dbrda_result)$cont$importance[2, 1:2]), 2)
+
+plot(dbrda_result, 
+     display = "sites", 
+     scaling = "symmetric", 
+     type = "none",
+     # main = "dbRDA (Gower), SCH, Model 1 (LUI components)", 
+     xlab = paste0("dbRDA1 (", perc[1], "%)"), 
+     ylab = paste0("dbRDA2 (", perc[2], "%)")); 
+# Add points 
+points(dbrda_result, 
+       display = "sites", 
+       scaling = "symmetric", 
+       pch = 1, 
+       col = "chocolate")
+# Add enviromental vectors
+plot(env_fit, add = TRUE, col = "steelblue")
+```
+
+Surface plots for significant variables
+
+```{r}
+# Examine only significant variables 
+ordisurf(x = dbrda_result, y = as.data.frame(preds_m1_SCH)$Forest, bubble = 5, 
+         main = "Forest, Mod 1, SCH",
+         xlab = paste0("dbRDA1 (", perc[1], "%)"), 
+         ylab = paste0("dbRDA2 (", perc[2], "%)"))
+ordisurf(x = dbrda_result, y = as.data.frame(preds_m1_SCH)$Mowing, bubble = 5,
+         main = "Mowing, Mod 1, SCH",
+         xlab = paste0("dbRDA1 (", perc[1], "%)"), 
+         ylab = paste0("dbRDA2 (", perc[2], "%)"))
+ordisurf(x = dbrda_result, y = as.data.frame(preds_m1_SCH)$Grazing, bubble = 5,
+         main = "Grazing, Mod 1, SCH",
+         xlab = paste0("dbRDA1 (", perc[1], "%)"), 
+         ylab = paste0("dbRDA2 (", perc[2], "%)"))
+ordisurf(x = dbrda_result, y = as.data.frame(preds_m1_SCH)$Fert, bubble = 5, 
+         main = "Fert, Mod 1, SCH",
+         xlab = paste0("dbRDA1 (", perc[1], "%)"), 
+         ylab = paste0("dbRDA2 (", perc[2], "%)"))
+```
+
+Rerun analysis using standardized predictors to see if significant predictors hold
+
+```{r}
+
+dbrda_result <- dbrda(
+  dists ~ Forest + Arable + Mowing + Grazing + Fert + PC1 + PC2,
+  data = as.data.frame(preds_m1_SCH_std),
+  add = FALSE, # Add a constant to the non-diagonal dissimilarities to avoid negative eigenvalues
+  sqrt.dist = FALSE # square roots of dissimilarities to avoid negative eigenvalues
+)
+dbrda_result
+
+# Calculate R^2
+vegan::RsquareAdj(dbrda_result)
+
+# Check multiple correlation
+vif.cca(dbrda_result)
+
+# Decompose inertia
+pstat <- permustats(anova.cca(
+  dbrda_result,
+  permutations = how(nperm = 9999),
+  model = "direct", # because we do not have partialised term
+  by = "margin" # Type III ANOVA: partial, Test term after accounting for all  other terms
+)) 
+summary(pstat)
+```
+
+Conclusion: no change.
+
+## Appendix A8: Constrained ordinations (distLM/dbRDA) - Model 2
+
+### ALB, Model 2 (timing)
+
+Calculate distance matrix responses
+
+```{r}
+dists <- cluster::daisy(resp_m2_ALB, metric = "gower")
+```
+
+PERMANOVA with interaction between Forest and timing to test the H2: Is the effect of timing of the first mow modulated by increased landscape forest composition?
+
+```{r}
+dbrda_result <- dbrda(
+  dists ~ Arable + Forest*Timing + PC1 + PC2,
+  data = as.data.frame(preds_m2_ALB),
+)
+
+set.seed(42) # For reproducibility
+
+anova.cca(
+  dbrda_result,
+  permutations = how(nperm = 9999),
+  model = "direct", # because we do not have partialised term
+  by = "margin" # Type III ANOVA: partial, Test term after accounting for all  other terms
+) %>% 
+  kable()
+```
+
+Conclusion: Interactions are not significant so we can remove them from model
+
+PERMANOVA with additive model. Marginal test for analysis and partitioning of sums of squares
+
+```{r}
+dbrda_result <- dbrda(
+  dists ~ Forest + Arable + Timing + PC1 + PC2,
+  data = as.data.frame(preds_m2_ALB),
+)
+
+set.seed(42) # For reproducibility
+
+summary(permustats(anova.cca(
+  dbrda_result,
+  permutations = how(nperm = 9999),
+  model = "direct", # because we do not have partialised term
+  by = "margin" # Type III ANOVA: partial, Test term after accounting for all  other terms
+)))
+
+# Check multiple correlation
+vif.cca(dbrda_result)
+
+# Decompose inertia
+
+set.seed(42) # For reproducibility
+```
+
+PERMANOVA with adonis2 to get summary table with partial R2 per term. This is identical to dbRDA() above but with the partial R2.
+
+```{r}
+set.seed(42) # For reproducibility
+
+pstat <- 
+  adonis2(
+    dists ~ Forest + Arable + Timing + PC1 + PC2,
+    data = as.data.frame(preds_m2_ALB),
+    permutations = how(nperm = 9999),
+    by = "margin")
+
+pstat %>% kable()
+
+pstat %>% write.csv("output/multivar_analysis/PERMANOVA_mod2_ALB.csv")
+
+# TODO Add species scores 
+# sppscores(dbrda_result) <- resp_m1_ALB
+
+pvals <- summary(permustats(pstat))
+
+# Get names of significant environmental variables (p ≤ 0.05)
+sig_vars <- names(pvals[[1]])[pvals$p <= 0.05]
+```
+
+Visualise standardized effect sizes (SES)
+
+```{r}
+boxplot(permustats(pstat, scale = TRUE))
+```
+
+Conclusion: Not a single significant predictor. Reject H1 and H2. We therefore, do not visualize the dbRDA ordination
+
+Rerun analysis using standardized predictors to see if significant predictors hold
+
+```{r}
+dbrda_result <- dbrda(
+  dists ~ Forest + Arable + Timing + PC1 + PC2,
+  data = as.data.frame(preds_m2_ALB_std),
+  add = FALSE, # Add a constant to the non-diagonal dissimilarities to avoid negative eigenvalues
+  sqrt.dist = FALSE # square roots of dissimilarities to avoid negative eigenvalues
+)
+dbrda_result
+
+# Calculate R^2
+vegan::RsquareAdj(dbrda_result)
+
+# Check multiple correlation
+vif.cca(dbrda_result)
+
+# Decompose inertia
+pstat <- permustats(anova.cca(
+  dbrda_result,
+  permutations = how(nperm = 9999),
+  model = "direct", # because we do not have partialised term
+  by = "margin" # Type III ANOVA: partial, Test term after accounting for all  other terms
+)) 
+summary(pstat)
+```
+
+Conclusion: no change.
+
+### SCH, Model 2 (timing)
+
+Calculate distance matrix responses
+
+```{r}
+dists <- cluster::daisy(resp_m2_SCH, metric = "gower")
+```
+
+PERMANOVA with interaction between Forest and timing to test the H2: Is the effect of timing of the first mow modulated by increased landscape forest composition?
+
+```{r}
+dbrda_result <- dbrda(
+  dists ~ Arable + Forest*Timing + PC1 + PC2,
+  data = as.data.frame(preds_m2_SCH),
+)
+
+set.seed(42) # For reproducibility
+
+anova.cca(
+  dbrda_result,
+  permutations = how(nperm = 9999),
+  model = "direct", # because we do not have partialised term
+  by = "margin" # Type III ANOVA: partial, Test term after accounting for all  other terms
+) %>% 
+  kable()
+```
+
+Conclusion: Interactions are not significant so we can remove them from model
+
+PERMANOVA with additive model. Marginal test for analysis and partitioning of sums of squares
+
+```{r}
+dbrda_result <- dbrda(
+  dists ~ Forest + Arable + Timing + PC1 + PC2,
+  data = as.data.frame(preds_m2_SCH),
+)
+
+set.seed(42) # For reproducibility
+
+summary(permustats(anova.cca(
+  dbrda_result,
+  permutations = how(nperm = 9999),
+  model = "direct", # because we do not have partialised term
+  by = "margin" # Type III ANOVA: partial, Test term after accounting for all  other terms
+)))
+
+# Check multiple correlation
+vif.cca(dbrda_result)
+
+# Decompose inertia
+
+set.seed(42) # For reproducibility
+```
+
+PERMANOVA with adonis2 to get summary table with partial R2 per term. This is identical to dbRDA() above but with the partial R2.
+
+```{r}
+set.seed(42) # For reproducibility
+
+pstat <- 
+  adonis2(
+    dists ~ Forest + Arable + Timing + PC1 + PC2,
+    data = as.data.frame(preds_m2_SCH),
+    permutations = how(nperm = 9999),
+    by = "margin")
+
+pstat %>% kable()
+
+pstat %>% write.csv("output/multivar_analysis/PERMANOVA_mod2_SCH.csv")
+
+# TODO Add species scores 
+# sppscores(dbrda_result) <- resp_m1_ALB
+
+pvals <- summary(permustats(pstat))
+
+# Get names of significant environmental variables (p ≤ 0.05)
+sig_vars <- names(pvals[[1]])[pvals$p <= 0.05]
+```
+
+Visualise standardized effect sizes (SES)
+
+```{r}
+boxplot(permustats(pstat, scale = TRUE))
+```
+
+Conclusion: Not a single significant predictor. Reject H1 and H2. We therefore, do not visualize the dbRDA ordination
+
+Rerun analysis using standardized predictors to see if significant predictors hold
+
+```{r}
+dbrda_result <- dbrda(
+  dists ~ Forest + Arable + Timing + PC1 + PC2,
+  data = as.data.frame(preds_m2_SCH_std),
+  add = FALSE, # Add a constant to the non-diagonal dissimilarities to avoid negative eigenvalues
+  sqrt.dist = FALSE # square roots of dissimilarities to avoid negative eigenvalues
+)
+dbrda_result
+
+# Check multiple correlation
+vif.cca(dbrda_result)
+
+# Decompose inertia
+pstat <- permustats(anova.cca(
+  dbrda_result,
+  permutations = how(nperm = 9999),
+  model = "direct", # because we do not have partialised term
+  by = "margin" # Type III ANOVA: partial, Test term after accounting for all  other terms
+)) 
+summary(pstat)
+```
+
+Conclusion: no change.
+
+## Appendix A9: [Un]{.underline}constrained ordinations (NMDS) - Model 1
+
+### ALB, Model 1 (LUI components)
+
+```{r}
+# fit NMDS with vegan
+
+set.seed(42) # For reproducibility
+result_nmds <-
+  metaMDS(
+    cluster::daisy(resp_m1_ALB, metric = "gower"),
+    trace = FALSE,
+    k = 2,
+    try = 100,
+    trymax = 100,
+    autotransform = FALSE,
+    wascores = TRUE
+  ) # check arguments to adjust e.g. turn off automatic wisconsin() trasnformation for env. data (use for spp data)
+result_nmds
+
+# Fit environmental variables
+
+set.seed(42) # For reproducibility
+env_fit <- envfit(ord = result_nmds, 
+                  env = preds_m1_ALB, 
+                  permutations = 0,
+                  choices=c(1,2),  
+                  # scaling = ""
+                  display = "sites")  # 999 permutations for significance testing
+env_fit
+```
+
+Visualize NMDS
+
+```{r}
+#| label: fig-A44
+#| fig-cap: "Biplot NMDS, model 1, ALB"
+
+layout(matrix(1:2, ncol = 2))
+plot(result_nmds, 
+     type = "none");
+     # main = "NMDS (Gower), ALB, Model 1 (LUI components)");
+# Add points 
+points(result_nmds, 
+       display = "sites", 
+       pch = 1, 
+       col = "chocolate")
+# Add enviromental vectors
+plot(env_fit, add = TRUE, col = "steelblue");
+stressplot(result_nmds)#, main = "Shepard plot")
+layout(1) 
+```
+
+### SCH, Model 1 (LUI components)
+
+```{r}
+# fit NMDS with vegan
+set.seed(42) # For reproducibility
+result_nmds <-
+  metaMDS(
+    cluster::daisy(resp_m1_SCH, metric = "gower"),
+    trace = FALSE,
+    k = 2,
+    try = 100,
+    trymax = 100,
+    autotransform = FALSE,
+    wascores = TRUE
+  ) # check arguments to adjust e.g. turn off automatic wisconsin() trasnformation for env. data (use for spp data)
+result_nmds
+
+# Fit environmental variables
+env_fit <- envfit(result_nmds, preds_m1_SCH, permutations = 0)  # 999 permutations for significance testing
+env_fit
+```
+
+Visualise NMDS
+
+```{r}
+#| label: fig-A46
+#| fig-cap: "Biplot NMDS, model 1, SCH"
+
+layout(matrix(1:2, ncol = 2))
+plot(result_nmds, 
+     type = "none");
+     # main = "NMDS (Gower), SCH, Model 1 (LUI components)");
+# Add points 
+points(result_nmds, 
+       display = "sites", 
+       pch = 1, 
+       col = "chocolate")
+# Add enviromental vectors
+plot(env_fit, add = TRUE, col = "steelblue");
+stressplot(result_nmds)#, main = "Shepard plot")
+layout(1) 
+```
+
+## Appendix A10: [Un]{.underline}constrained ordinations (NMDS) - Model 2
+
+### ALB, Model 2 (timing)
+
+```{r}
+# fit NMDS with vegan
+set.seed(42) # For reproducibility
+result_nmds <-
+  metaMDS(
+    cluster::daisy(resp_m2_ALB, metric = "gower"),
+    trace = FALSE,
+    distance = "gower",
+    k = 2,
+    try = 100,
+    trymax = 100,
+    autotransform = FALSE,
+    wascores = TRUE
+  ) # check arguments to adjust e.g. turn off automatic wisconsin() trasnformation for env. data (use for spp data)
+result_nmds
+
+# Fit environmental variables
+env_fit <- envfit(result_nmds, preds_m2_ALB, permutations = 0) # permutations for significance testing
+env_fit
+```
+
+Visualise NMDS
+
+```{r}
+#| label: fig-A45
+#| fig-cap: "Biplot NMDS, model 2, ALB"
+
+layout(matrix(1:2, ncol = 2))
+plot(result_nmds, 
+     type = "none");
+     # main = "NMDS (Gower), ALB, Model 2 (timing)");
+# Add points 
+points(result_nmds, 
+       display = "sites", 
+       pch = 1, 
+       col = "chocolate")
+# Add enviromental vectors
+plot(env_fit, add = TRUE, col = "steelblue");
+stressplot(result_nmds)#, main = "Shepard plot")
+layout(1) 
+```
+
+### SCH, Model 2 (timing)
+
+```{r}
+# fit NMDS with vegan
+set.seed(42) # For reproducibility
+result_nmds <-
+  metaMDS(
+    cluster::daisy(resp_m2_SCH, metric = "gower"),
+    trace = FALSE,
+    k = 2,
+    try = 100,
+    trymax = 100,
+    autotransform = FALSE,
+    wascores = TRUE
+  ) # check arguments to adjust e.g. turn off automatic wisconsin() trasnformation for env. data (use for spp data)
+result_nmds
+
+# Fit environmental variables
+env_fit <- envfit(result_nmds, preds_m2_SCH, permutations = 0)  # 999 permutations for significance testing
+env_fit
+```
+
+Visualise NMDS
+
+```{r}
+#| label: fig-A47
+#| fig-cap: "Biplot NMDS, model 1, SCH"
+
+layout(matrix(1:2, ncol = 2))
+plot(result_nmds, 
+     type = "none");
+     # main = "NMDS (Gower), SCH, Model 2 (timing)");
+# Add points 
+points(result_nmds, 
+       display = "sites", 
+       pch = 1, 
+       col = "chocolate")
+# Add enviromental vectors
+plot(env_fit, add = TRUE, col = "steelblue");
+stressplot(result_nmds)#, main = "Shepard plot")
+layout(1) 
+```
+
+## Appendix A11: Threshold Indicator Taxa Analysis (TITAN2) - ALB
+
+-   To relate our indicators to the continuously distributed variables to find thresholds for each conservation indicator.
+
+-   Proposed by Baker & King [@king2010; @baker2013; @baker2010].
+
+-   Analysis per predictor. Only significant predictors from dbRDA results
+
+-   NAs removed in indicators and predictors, and harmonised dimensions
+
+-   Removed Nestedness for SCH due to high number of NAs
+
+-   Discuss only indicators with purity and reliability criteria (\>0.95)
+
+-   For model 2 in ALB and SCH, we found no significant predictors with dbRDA analysis, so we do not run the analysis with timing.
+
+-   It is a blend of univariate regression trees and indicator species analysis (ISA). The procedure:
+
+    1\) TITAN considers all possible values that split the environmental variable into two groups (regression tree):
+
+    -   low values (z-) = negative response to increase in gradient = decreasers
+
+    -   high values (z+) = positive response to increase in gradient = increasers
+
+    2\) Summarize for each species (in our case each indicator), whether it is more strongly associated with z- or z+ and the value of the Indicator Value (an ISA for each env var).
+
+    3\) Find the change point, i.e. the value of the environmental gradient that most strongly separated the indicator into two groups
+
+    4\) Assess statistical significance using bootstrap resampling. This is a permutation-based procedure.
+
+    5\) Evaluate the strength of the relationship as determined through the bootstrap resampling using "Purity" (pure response direction) and "Reliability" (reliable response magnitude)
+
+**Prepare datasets for analysis**
+
+-   remove any NA in the indicator
+
+-   remove any NA in the predictors
+
+-   harmonize dims of matrices to match each other
+
+```{r}
+#| output: FALSE
+
+# Check predictors
+anyNA(preds_m1_ALB)
+anyNA(preds_m2_ALB)
+anyNA(preds_m1_SCH)
+anyNA(preds_m2_SCH)
+# Conclusion: no NA in the predictors
+
+# Check responses
+anyNA(resp_m1_ALB)
+is.na(resp_m1_ALB)
+anyNA(resp_m2_ALB)
+is.na(resp_m2_ALB)
+anyNA(resp_m1_SCH)
+is.na(resp_m1_SCH)
+anyNA(resp_m2_SCH)
+is.na(resp_m2_SCH)
+
+anyNA(resp_m1_SCH[, colnames(resp_m1_SCH) != "nestedness"])
+anyNA(resp_m2_SCH[, colnames(resp_m2_SCH) != "nestedness"])
+# Conclusion: only one NA in responses in region ALB in var Nestedness. Decission: remove that one row. In region SCH we have multiple NA in nestedness, so we remove run two models, one in which we remove all rows with NAs, and one in which we remove that var instead of all rows. 
+
+# Identify rows without NA in responses and use to subset both responses and predictors
+preds_m1_ALB <- preds_m1_ALB[complete.cases(resp_m1_ALB), ]
+resp_m1_ALB <- resp_m1_ALB[complete.cases(resp_m1_ALB), ]
+
+preds_m2_ALB <- preds_m2_ALB[complete.cases(resp_m2_ALB), ]
+resp_m2_ALB <- resp_m2_ALB[complete.cases(resp_m2_ALB), ]
+
+# create matrices without nestedness 
+preds_m1_SCH_no_nest <- preds_m1_SCH
+resp_m1_SCH_no_nest <- resp_m1_SCH[, colnames(resp_m1_SCH) != "nestedness"]
+preds_m2_SCH_no_nest <- preds_m2_SCH
+resp_m2_SCH_no_nest <- resp_m2_SCH[, colnames(resp_m2_SCH) != "nestedness"]
+
+# create SCH matrices with nestedness, but no NA in the rows. 
+
+preds_m1_SCH <- preds_m1_SCH[complete.cases(resp_m1_SCH), ]
+resp_m1_SCH <- resp_m1_SCH[complete.cases(resp_m1_SCH), ]
+
+preds_m2_SCH <- preds_m2_SCH[complete.cases(resp_m2_SCH), ]
+resp_m2_SCH <- resp_m2_SCH[complete.cases(resp_m2_SCH), ]
+
+# check that new dimensions of predictors and responses match
+
+dim(preds_m1_ALB)[1] == dim(resp_m1_ALB)[1]
+dim(preds_m2_ALB)[1] == dim(resp_m2_ALB)[1]
+dim(preds_m1_SCH)[1] == dim(resp_m1_SCH)[1]
+dim(preds_m2_SCH)[1] == dim(resp_m2_SCH)[1]
+dim(preds_m1_SCH_no_nest)[1] == dim(resp_m1_SCH_no_nest)[1]
+dim(preds_m2_SCH_no_nest)[1] == dim(resp_m2_SCH_no_nest)[1]
+
+# Check dims
+
+dim(preds_m1_ALB)
+dim(resp_m1_ALB)
+dim(preds_m2_ALB)
+dim(resp_m2_ALB)
+dim(preds_m1_SCH)
+dim(resp_m1_SCH)
+dim(preds_m2_SCH)
+dim(resp_m2_SCH)
+dim(preds_m1_SCH_no_nest)
+dim(resp_m1_SCH_no_nest)
+dim(preds_m2_SCH_no_nest)
+dim(resp_m2_SCH_no_nest)
+```
+
+The resulting object is a list with several elements, including:
+
+sppmax -- a table showing the summary statistics for each species:
+
+-   ienv.cp -- change point if based on IndVal maximum. Ignore unless you set imax = FALSE.
+
+-   zenv.cp -- change point if based on z-score maximum (default setting)
+
+-   freq -- frequency; number of non-zero abundance values
+
+-   maxgrp -- in which group the species had its maximum IndVal. Either 1 (z- group) or 2 (z+ group).
+
+-   IndVal -- the maximum IndVal statistic (range = 0-100%) for the species
+
+-   obsiv.prob -- Probability of an equal or larger IndVal from random permutations. Used for calculation of reliability.
+
+-   zscore -- IndVal expressed as a z-score
+
+-   5%, 10%, 50%, 90%, 95% -- change point quantiles among bootstrap replicates
+
+-   purity -- proportion of replicates for which maxgrp matches observed maxgrp
+
+-   reliability -- proportion of replicates with obsiv.prob ≤ 0.05
+
+-   z.median -- median z-score across replicates
+
+-   filter -- 0 if species did not meet purity and reliability criteria, otherwise 1 (z- group) or 2 (z+ group)
+
+sumz.cp -- observed community-level (i.e., across species) change point (cp) and quantiles associated with its distribution as determined by resampling. Values are summarized for:
+
+-   All species associated with smaller values of the environmental variable (row 'sumz-')
+
+-   All species associated with higher values of the environmental variable (row 'sumz+')
+
+-   Filtered values, using only those species that were pure and reliable indicators of the group defined by smaller values of the environmental variable (row 'fsumz-').
+
+-   Filtered values, using only those species that were pure and reliable indicators of the group defined by higher values of the environmental variable (row 'fsumz+').
+
+Taken from Bakker, Jonathan D. 2024. 'Applied Multivariate Statistics in R'. pp. 525
+
+### ALB - Mowing
+
+```{r}
+
+# Threshold Indicator Taxa Analysis
+titan_m1_ALB_Mowing <-
+  titan(
+    as.data.frame(preds_m1_ALB)$Mowing, # env vars
+    resp_m1_ALB, # indicators 
+    minSplt = 5, # min split size to use during partitioning
+    numPerm = 1000, # n of random permutations to be used during ISA
+    boot = TRUE, # to conduct bootstrap resampling
+    nBoot = 1000, # n of replicates to use during bootstrap resampling
+    imax = FALSE, # to determine taxon-specific change points based on z-score maxima
+    ivTot = FALSE, # to calculate IndVal scores using mean relative abundance
+    pur.cut = 0.95, # cut-off for determining purity across bootstrap replicates
+    rel.cut = 0.95, # cut-off for determining reliability across bootstrap replicates.
+    ncpus = 8,
+    memory = FALSE,
+    messaging = TRUE
+  )
+```
+
+**Filter indicators that meet the purity and reliability criteria**
+
+```{r}
+#| label: tbl-A12
+#| tbl-cap: "Pure and reliable indicators, TITAN mowing, ALB"
+
+TITAN_indicators_mowing_ALB <- 
+  titan_m1_ALB_Mowing$sppmax %>% 
+  as.data.frame() %>% 
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, z.median, purity, reliability, filter) %>% 
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>% 
+  # arranged by group: 1 (z- group) or 2 (z+ group), and then by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  select(-filter)
+  
+TITAN_indicators_mowing_ALB %>% 
+  kable(booktabs = TRUE) 
+```
+
+-   Eight conservation indicators were pure and reliable decreasers (maxgrp = 1) i.e. the value of these indicator increased as Mowing decrease.
+
+-   Three conservation indicators were pure and reliable increasers (maxgrp = 2) i.e. the value of these indicator increased as Mowing increased.
+
+-   The MOWING frequency that most strongly differentiates plots based on plant_richness, multidiversity, red_list_butterflies, threat_butterflies, and trophic interactions is zenv.cp = 1 cut per year. For butterfly_richness and abund_butterflies this value is 1.5, and for nestedness = 2 cuts per year. These indicators are more strongly associated with mowing frequency values BELOW these thresholds (maxgrp = 1).
+
+-   The MOWING frequency that most strongly differentiates plots based on reg_dist_butterflies (i.e. butterflies with higher regional distribution range), crop_pest_potential and connectance is zenv.cp = 0.5, 1, and 2 respectively. These indicators are more strongly associated with mowing frequency values ABOVE these thresholds (maxgrp = 2).
+
+**Ridge plot of conservation indicators: view the change point criteria for each conservation indicator**
+
+```{r, fig.height=7, eval=FALSE}
+#| label: fig-A28
+#| fig-cap: "Ridge plot displaying conservation indicators that are strongly and consistently associated with sites under low (blue) or high (red) mowing intensity in ALB. Conservation indicators names are identified on the y-axis.The intensity of the color relates to the strength of the z-score obtained for IndVal. For each indicator, the change points show the probability density function of the bootstrapped replicates, and the vertical line is the median."
+
+plot_taxa_ridges(
+  titan_m1_ALB_Mowing, 
+  d_lines = FALSE,
+  xaxis = TRUE,
+  rel_heights = c(0.55, 0.45),
+  xlabel = expression("Mowing frequency" ~ year^-1 * ", region ALB")
+) 
+```
+
+```{r, fig.height=8, eval=FALSE}
+#| label: fig-A29
+#| fig-cap: "Indicator-specific change points with quantiles from bootstrapped samples and filtered by pure and reliable indicators for mowing, ALB"
+
+plot_taxa(
+  titan_m1_ALB_Mowing, 
+  xlabel = expression("Mowing frequency" ~ year^-1 * ", region ALB")
+) 
+```
+
+**Change across all indicator identified with TITAN2**
+
+```{r, fig.height=7}
+#| label: fig-A31
+#| fig-cap: "Plot change across all conservation indicators identified with TITAN2 for variable mowing in ALB. The top panel shows the magnitude of change among indicators declining (z-) and/or increasing (z+) along the gradient. Peaks in the values indicate points along the environmental gradient that produce large amounts of change in the values of community indicators. These are the nominal ecosystem-wide change points. Plateaus denote regions of similar change."
+
+plot_sumz_density(
+  titan_m1_ALB_Mowing,
+  ribbon = FALSE,
+  points = TRUE,
+  xlabel = expression("Mowing frequency" ~ year ^ -1 * ", region ALB")
+)
+```
+
+```{r, eval=FALSE, eval=FALSE}
+#| label: fig-plot_sumz1
+#| fig-cap: "Plot change across all conservation indicators, mowing, ALB"
+plot_sumz(
+  titan_m1_ALB_Mowing, 
+  filter = TRUE,
+  xlabel = expression("Mowing frequency" ~ year^-1 * ", region ALB")
+)
+```
+
+### ALB - Grazing
+
+```{r}
+# Threshold Indicator Taxa Analysis
+titan_m1_ALB_Grazing <-
+  titan(
+    as.data.frame(preds_m1_ALB)$Grazing, # env vars
+    resp_m1_ALB, # indicators 
+    minSplt = 5, # min split size to use during partitioning
+    numPerm = 1000, # n of random permutations to be used during ISA
+    boot = TRUE, # to conduct bootstrap resampling
+    nBoot = 1000, # n of replicates to use during bootstrap resampling
+    imax = FALSE, # to determine taxon-specific change points based on z-score maxima
+    ivTot = FALSE, # to calculate IndVal scores using mean relative abundance
+    pur.cut = 0.95, # cut-off for determining purity across bootstrap replicates
+    rel.cut = 0.95, # cut-off for determining reliability across bootstrap replicates.
+    ncpus = 8,
+    memory = FALSE,
+    messaging = TRUE
+  )
+```
+
+**Filter indicators that meet the purity and reliability criteria**
+
+```{r}
+#| label: tbl-A13
+#| tbl-cap: "Pure and reliable indicators, grazing, ALB"
+
+TITAN_indicators_grazing_ALB <- 
+  titan_m1_ALB_Grazing$sppmax %>% 
+  as.data.frame() %>% 
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, z.median, purity, reliability, filter) %>% 
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>% 
+  # arranged by group: 1 (z- group) or 2 (z+ group), and then by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  select(-filter) 
+
+TITAN_indicators_grazing_ALB %>% 
+  kable()
+```
+
+-   Four conservation indicators were pure and reliable increasers (maxgrp = 2) i.e. the value of these indicator increased as Grazing increased.
+
+-   The GRAZING intensity that most strongly differentiates plots based on butterfly richness, multidiversity, trophic interactions, and TODO biomass_lepi is zenv.cp = 0.02. These indicators are more strongly associated with grazing intensity values ABOVE this threshold (maxgrp = 2).
+
+**Ridge plot of conservation indicators: view the change point criteria for each conservation indicator**
+
+```{r, eval=FALSE}
+#| label: fig-A32
+#| fig-cap: "Ridge plot displaying conservation indicators that are strongly and consistently associated with sites under low (blue) or high (red) grazing intensity in ALB. Conservation indicators names are identified on the y-axis.The intensity of the color relates to the strength of the z-score obtained for IndVal. For each indicator, the change points show the probability density function of the bootstrapped replicates, and the vertical line is the median."
+
+plot_taxa_ridges(
+  titan_m1_ALB_Grazing, 
+  z1 = FALSE,
+  d_lines = FALSE,
+  xaxis = TRUE,
+  xlabel = expression("Grazing intensity (LSU × days of grazing" ~ ha^{-1} ~ year^{-1} * "), region ALB")
+)
+```
+
+```{r, fig.height=8, eval=FALSE}
+#| label: fig-A33
+#| fig-cap: "Indicator-specific change points with quantiles from bootstrapped samples and filtered by pure and reliable indicators for grazing, ALB"
+
+plot_taxa(
+  titan_m1_ALB_Grazing, 
+  z1 = FALSE,
+  xlabel = expression("Grazing intensity (LSU × days of grazing" ~ ha^{-1} ~ year^{-1} * "), region ALB")
+) 
+```
+
+**Change across all indicator identified with TITAN2**
+
+```{r}
+#| label: fig-A34
+#| fig-cap: "Change across all indicator identified with TITAN2 for grazing in ALB. There are three component panels in the default output and we will consider them from the bottom to the top. The first plot is a slight modification of the original sum(z) plot first presented by Baker and King (2010). It shows the magnitude of change among taxa declining along the gradient (z-) and those increasing along the gradient. Peaks in the values indicate points along the environmental gradient that produce large amounts of change in community composition and/or structure. These are the nominal community change points. Plateaus denote regions of similar change. The sums are converted to areas using the logical argument ribbon, a line plot can be obtained by setting ribbon to FALSE, and the original point plot can be obtained by setting the logical argument points to TRUE."
+
+plot_sumz_density(
+  titan_m1_ALB_Grazing,
+  ribbon = FALSE,
+  points = TRUE,
+  xlabel = expression(
+    "Grazing intensity (LSU × days of grazing" ~ ha ^ {-1} ~ year ^ {-1} * "), region ALB")
+)
+```
+
+```{r, eval=FALSE, eval=FALSE}
+#| label: fig-plot_sumz2
+#| fig-cap: "Plot taxa, grazing, ALB"
+
+plot_sumz(
+  titan_m1_ALB_Grazing, 
+  filter = TRUE,
+  xlabel = expression("Grazing intensity (LSU × days of grazing" ~ ha^{-1} ~ year^{-1} * "), region ALB")
+)
+```
+
+### ALB - PC2
+
+```{r}
+
+# Threshold Indicator Taxa Analysis
+titan_m1_ALB_PC2 <-
+  titan(
+    as.data.frame(preds_m1_ALB)$PC2, # env vars
+    resp_m1_ALB, # indicators 
+    minSplt = 5, # min split size to use during partitioning
+    numPerm = 1000, # n of random permutations to be used during ISA
+    boot = TRUE, # to conduct bootstrap resampling
+    nBoot = 1000, # n of replicates to use during bootstrap resampling
+    imax = FALSE, # to determine taxon-specific change points based on z-score maxima
+    ivTot = FALSE, # to calculate IndVal scores using mean relative abundance
+    pur.cut = 0.95, # cut-off for determining purity across bootstrap replicates
+    rel.cut = 0.95, # cut-off for determining reliability across bootstrap replicates.
+    ncpus = 8,
+    memory = FALSE,
+    messaging = TRUE
+  )
+```
+
+**Filter indicators that meet the purity and reliability criteria**
+
+```{r}
+#| label: tbl-A14
+#| tbl-cap: "Pure and reliable indicators, PC2, ALB"
+
+TITAN_indicators_PC2_ALB <- 
+  titan_m1_ALB_PC2$sppmax %>% 
+  as.data.frame() %>% 
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, z.median, purity, reliability, filter) %>% 
+  filter(filter != 0) %>% 
+  # arranged by group: 1 (z- group) or 2 (z+ group), and then by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  select(-filter)
+
+TITAN_indicators_PC2_ALB %>% 
+  kable(booktabs = TRUE) 
+```
+
+Conclusion: no indicators that meet the purity and reliability criteria.
+
+## Appendix A12: Threshold Indicator Taxa Analysis (TITAN2) - SCH
+
+### SCH - Forest
+
+**Analysis using a subset of the matrix without nestedness**
+
+```{r}
+
+# Threshold Indicator Taxa Analysis
+
+titan_m1_SCH_no_nest_Forest <-
+  titan(
+    as.data.frame(preds_m1_SCH_no_nest)$Forest, # env vars
+    # remove red list butterfly indicators because they are all zeros due to absence in region
+    resp_m1_SCH_no_nest[, !colnames(resp_m1_SCH_no_nest) %in% c("red_list_butterflies", "threat_butterflies")],
+    minSplt = 5, # min split size to use during partitioning
+    numPerm = 1000, # n of random permutations to be used during ISA
+    boot = TRUE, # to conduct bootstrap resampling
+    nBoot = 1000, # n of replicates to use during bootstrap resampling
+    imax = FALSE, # to determine taxon-specific change points based on z-score maxima
+    ivTot = FALSE, # to calculate IndVal scores using mean relative abundance
+    pur.cut = 0.95, # cut-off for determining purity across bootstrap replicates
+    rel.cut = 0.95, # cut-off for determining reliability across bootstrap replicates.
+    ncpus = 8,
+    memory = FALSE,
+    messaging = TRUE
+  )
+```
+
+**Filter indicators that meet the purity and reliability criteria**
+
+```{r}
+#| label: tbl-A15
+#| tbl-cap: "Pure and reliable indicators, Forest, SCH"
+
+TITAN_indicators_forest_SCH <- 
+  titan_m1_SCH_no_nest_Forest$sppmax %>%
+  as.data.frame() %>%
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, z.median, purity, reliability, filter) %>%
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>%
+  # arranged by group: 1 (z- group) or 2 (z+ group), and then by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  select(-filter)
+
+TITAN_indicators_forest_SCH %>% 
+  kable(booktabs = TRUE) 
+```
+
+-   Two conservation indicators were pure and reliable increasers (maxgrp = 2) i.e. the value of these indicator increased as Prop. of Forest/Wood in the landscape increased.
+
+-   When using the matrix with no nestedness and therefore more sites (rows), the indicators connectance and trophic_interactions were still pure and reliable, but plant_richness not any more. The threshold values also changed from 2.2% to 8.1% for connectance, and from 13.9% to 22.2% for trophic_interactions. These indicators are more strongly associated with Prop. of Forest/Wood values ABOVE these thresholds (maxgrp = 2).
+
+**Ridge plot of conservation indicators: view the change point criteria for each conservation indicator**
+
+```{r, eval=FALSE}
+#| label: fig-A35
+#| fig-cap: "Ridge plot displaying conservation indicators that are strongly and consistently associated with sites under low (blue) or high (red) Prop. of Forest/Woodland in SCH. Conservation indicators names are identified on the y-axis.The intensity of the color relates to the strength of the z-score obtained for IndVal. For each indicator, the change points show the probability density function of the bootstrapped replicates, and the vertical line is the median."
+plot_taxa_ridges(
+  titan_m1_SCH_no_nest_Forest,
+  d_lines = FALSE,
+  xaxis = TRUE,
+  # rel_heights = c(0.55, 0.45),
+  # breaks = c(1, 2),
+  xlabel = "Prop. of Forest + Woodland at 1000 m from plot centroid, region SCH",
+  z1 = FALSE # set to F because we do not have decreasers
+) 
+```
+
+```{r, fig.height=7, eval=FALSE}
+#| label: fig-A36
+#| fig-cap: "Indicator-specific change points with quantiles from bootstrapped samples and filtered by pure and reliable indicators for forest, SCH"
+plot_taxa(
+  titan_m1_SCH_no_nest_Forest,
+  z1 = FALSE,
+  xlabel = "Prop. of Forest + Woodland at 1000 m from plot centroid, region SCH"
+) 
+```
+
+**Change across all indicator identified with TITAN2**
+
+```{r}
+#| label: fig-A37
+#| fig-cap: "Plot change across all conservation indicators identified with TITAN2 for Forest in SCH. The top panel shows the magnitude of change among indicators declining (z-) and/or increasing (z+) along the gradient. Peaks in the values indicate points along the environmental gradient that produce large amounts of change in the values of community indicators. These are the nominal ecosystem-wide change points. Plateaus denote regions of similar change. "
+
+plot_sumz_density(
+  titan_m1_SCH_no_nest_Forest,
+  ribbon = FALSE,
+  points = TRUE,
+  xlabel = "Prop. of Forest + Woodland at 1000 m from plot centroid, region SCH)"
+)
+```
+
+```{r, eval=FALSE, eval=FALSE}
+#| label: fig-plot_sumz3
+#| fig-cap: "Plot change across all conservation indicators, forest, SCH"
+plot_sumz(
+  titan_m1_SCH_no_nest_Forest, 
+  filter = TRUE,
+  xlabel = "Prop. of Forest + Woodland at 1000 m from plot centroid, region SCH)"
+)
+```
+
+### SCH - Mowing
+
+**Analysis using a subset of the matrix without nestedness**
+
+```{r}
+
+# Threshold Indicator Taxa Analysis
+titan_m1_SCH_no_nest_Mowing <-
+  titan(
+    as.data.frame(preds_m1_SCH_no_nest)$Mowing, # env vars
+     # remove red list butterfly indicators because they are all zeros due to absence in region
+    resp_m1_SCH_no_nest[, !colnames(resp_m1_SCH_no_nest) %in% c("red_list_butterflies", "threat_butterflies")],
+    minSplt = 5, # min split size to use during partitioning
+    numPerm = 1000, # n of random permutations to be used during ISA
+    boot = TRUE, # to conduct bootstrap resampling
+    nBoot = 1000, # n of replicates to use during bootstrap resampling
+    imax = FALSE, # to determine taxon-specific change points based on z-score maxima
+    ivTot = FALSE, # to calculate IndVal scores using mean relative abundance
+    pur.cut = 0.95, # cut-off for determining purity across bootstrap replicates
+    rel.cut = 0.95, # cut-off for determining reliability across bootstrap replicates.
+    ncpus = 8,
+    memory = FALSE,
+    messaging = TRUE
+  )
+```
+
+**Filter indicators that meet the purity and reliability criteria**
+
+```{r}
+#| label: tbl-A16
+#| tbl-cap: "Pure and reliable indicators, Mowing, SCH"
+
+TITAN_indicators_mowing_SCH <- 
+  titan_m1_SCH_no_nest_Mowing$sppmax %>%
+  as.data.frame() %>%
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, z.median, purity, reliability, filter) %>%
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>%
+  # arranged by group: 1 (z- group) or 2 (z+ group), and then by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  select(-filter)
+
+TITAN_indicators_mowing_SCH %>% 
+  kable(booktabs = TRUE)
+```
+
+Conclusion: running the analysis without nestedness dit not changed the results. There was no indicators that meet the purity and reliability criteria.
+
+### SCH - Grazing
+
+**Analysis using a subset of the matrix without nestedness**
+
+```{r}
+
+# Threshold Indicator Taxa Analysis
+titan_m1_SCH_no_nest_Grazing <-
+  titan(
+    as.data.frame(preds_m1_SCH_no_nest)$Grazing, # env vars
+    resp_m1_SCH_no_nest[, !colnames(resp_m1_SCH_no_nest) %in% c("red_list_butterflies", "threat_butterflies")], # indicators
+    minSplt = 5, # min split size to use during partitioning
+    numPerm = 1000, # n of random permutations to be used during ISA
+    boot = TRUE, # to conduct bootstrap resampling
+    nBoot = 1000, # n of replicates to use during bootstrap resampling
+    imax = FALSE, # to determine taxon-specific change points based on z-score maxima
+    ivTot = FALSE, # to calculate IndVal scores using mean relative abundance
+    pur.cut = 0.95, # cut-off for determining purity across bootstrap replicates
+    rel.cut = 0.95, # cut-off for determining reliability across bootstrap replicates.
+    ncpus = 8,
+    memory = FALSE,
+    messaging = TRUE
+  )
+```
+
+**Filter indicators that meet the purity and reliability criteria**
+
+```{r}
+#| label: tbl-A17
+#| tbl-cap: "Pure and reliable indicators, Grazing, SCH"
+
+TITAN_indicators_grazing_SCH <- 
+  titan_m1_SCH_no_nest_Grazing$sppmax %>%
+  as.data.frame() %>%
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, z.median, purity, reliability, filter) %>%
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>%
+  # arranged by group: 1 (z- group) or 2 (z+ group), and then by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  select(-filter)
+
+TITAN_indicators_grazing_SCH %>% 
+  kable(booktabs = TRUE)
+```
+
+-   When using the matrix with no nestedness and therefore more sites (rows), the indicator trophic_interactions was the only pure and reliable one.
+
+-   The threshold value changed from 0.845 to 1.465. This indicator is more strongly associated with GRAZING intensity values ABOVE that threshold (maxgrp = 2).
+
+**Ridge plot of conservation indicators: view the change point criteria for each conservation indicator**
+
+```{r, eval=FALSE}
+#| label: fig-38
+#| fig-cap: "Ridge plot displaying conservation indicators that are strongly and consistently associated with sites under low (blue) or high (red) grazing intensity in SCH. Conservation indicators names are identified on the y-axis.The intensity of the color relates to the strength of the z-score obtained for IndVal. For each indicator, the change points show the probability density function of the bootstrapped replicates, and the vertical line is the median."
+plot_taxa_ridges(
+  titan_m1_SCH_no_nest_Grazing, 
+  d_lines = FALSE,
+  xaxis = TRUE,
+  # rel_heights = c(0.55, 0.45),
+  # breaks = c(1, 2),
+  z1 = FALSE, # set to F because we do not have decreasers
+  xlabel = expression("Grazing intensity (LSU × days of grazing" ~ ha^{-1} ~ year^{-1} * "), region SCH")
+)
+```
+
+```{r, fig.height=7, eval=FALSE}
+#| label: fig-A39
+#| fig-cap: "Indicator-specific change points with quantiles from bootstrapped samples and filtered by pure and reliable indicators for Grazing, SCH"
+plot_taxa(
+  titan_m1_SCH_no_nest_Grazing, 
+  z1 = FALSE, # set to F because we do not have decreasers
+  xlabel = expression("Grazing intensity (LSU × days of grazing" ~ ha^{-1} ~ year^{-1} * "), region SCH")) 
+```
+
+**Change across all indicator identified with TITAN2**
+
+```{r}
+#| label: fig-A40
+#| fig-cap: "Plot change across all conservation indicators identified with TITAN2 for Grazing in SCH. The top panel shows the magnitude of change among indicators declining (z-) and/or increasing (z+) along the gradient. Peaks in the values indicate points along the environmental gradient that produce large amounts of change in the values of community indicators. These are the nominal ecosystem-wide change points. Plateaus denote regions of similar change. "
+
+plot_sumz_density(
+  titan_m1_SCH_no_nest_Grazing, 
+  ribbon = FALSE, 
+  points = TRUE, 
+  xlabel = expression("Grazing intensity (LSU × days of grazing" ~ ha^{-1} ~ year^{-1} * "), region SCH")
+)
+```
+
+```{r, eval=FALSE, eval=FALSE}
+#| label: fig-plot_sumz4
+#| fig-cap: "Plot change across all conservation indicators identified with TITAN2 for Grazing in SCH."
+plot_sumz(
+  titan_m1_SCH_no_nest_Grazing, 
+  filter = TRUE,
+  xlabel = expression("Grazing intensity (LSU × days of grazing" ~ ha^{-1} ~ year^{-1} * "), region SCH")
+)
+```
+
+### SCH - Fertilization
+
+**Analysis using a subset of the matrix without nestedness**
+
+```{r}
+
+# Threshold Indicator Taxa Analysis
+titan_m1_SCH_no_nest_Fert <-
+  titan(
+    as.data.frame(preds_m1_SCH_no_nest)$Fert, # env vars
+     resp_m1_SCH_no_nest[, !colnames(resp_m1_SCH_no_nest) %in% c("red_list_butterflies", "threat_butterflies")], # indicators
+    minSplt = 5, # min split size to use during partitioning
+    numPerm = 1000, # n of random permutations to be used during ISA
+    boot = TRUE, # to conduct bootstrap resampling
+    nBoot = 1000, # n of replicates to use during bootstrap resampling
+    imax = FALSE, # to determine taxon-specific change points based on z-score maxima
+    ivTot = FALSE, # to calculate IndVal scores using mean relative abundance
+    pur.cut = 0.95, # cut-off for determining purity across bootstrap replicates
+    rel.cut = 0.95, # cut-off for determining reliability across bootstrap replicates.
+    ncpus = 8,
+    memory = FALSE,
+    messaging = TRUE
+  )
+```
+
+**Filter indicators that meet the purity and reliability criteria**
+
+```{r}
+#| label: tbl-A18
+#| tbl-cap: "Pure and reliable indicators, Fertilisation, SCH"
+
+TITAN_indicators_fert_SCH <- 
+  titan_m1_SCH_no_nest_Fert$sppmax %>%
+  as.data.frame() %>%
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, z.median, purity, reliability, filter) %>%
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>%
+  # arranged by group: 1 (z- group) or 2 (z+ group), and then by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  select(-filter)
+
+TITAN_indicators_fert_SCH %>% 
+  kable(booktabs = TRUE) 
+```
+
+-   When using the matrix with no nestedness and therefore more sites (rows), the indicator reg_dist_butterflies was still the only pure and reliable one and the threshold value remained at zenv.cp = 0. This indicator is more strongly associated with fertilisation levels values ABOVE that threshold (maxgrp = 2).
+
+**Ridge plot of conservation indicators: view the change point criteria for each conservation indicator**
+
+```{r, eval=FALSE}
+#| label: fig-A41
+#| fig-cap: "Ridge plot displaying conservation indicators that are strongly and consistently associated with sites under low (blue) or high (red) fertilization level in SCH. Conservation indicators names are identified on the y-axis.The intensity of the color relates to the strength of the z-score obtained for IndVal. For each indicator, the change points show the probability density function of the bootstrapped replicates, and the vertical line is the median."
+plot_taxa_ridges(
+  titan_m1_SCH_no_nest_Fert,
+  d_lines = FALSE,
+  xaxis = TRUE,
+  # rel_heights = c(0.55, 0.45),
+  # breaks = c(1, 2),
+  z1 = FALSE, # set to F because we do not have decreasers
+  xlabel = expression("Fertilisation level (kg N" ~ ha ^-1 ~ year ^ -1 * "), region SCH")
+)
+```
+
+```{r, fig.height=7, eval=FALSE}
+#| label: fig-A42
+#| fig-cap: "Indicator-specific change points with quantiles from bootstrapped samples and filtered by pure and reliable indicators for Fertilisation, SCH."
+plot_taxa(
+  titan_m1_SCH_no_nest_Fert, 
+  z1 = FALSE, # set to F because we do not have decreasers
+  xlabel = expression("Fertilisation level (kg N" ~ ha^-1 ~ year^-1 * "), region SCH")
+) 
+```
+
+Plot change across all conservation indicators identified with TITAN2. The top panel shows the magnitude of change among indicators declining (z-) and/or increasing (z+) along the gradient. Peaks in the values indicate points along the environmental gradient that produce large amounts of change in the values of community indicators. These are the nominal ecosystem-wide change points. Plateaus denote regions of similar change.
+
+**Change across all indicator identified with TITAN2**
+
+```{r}
+#| label: fig-A43
+#| fig-cap: "Plot change across all conservation indicators identified with TITAN2 for Fertilisation in SCH. The top panel shows the magnitude of change among indicators declining (z-) and/or increasing (z+) along the gradient. Peaks in the values indicate points along the environmental gradient that produce large amounts of change in the values of community indicators. These are the nominal ecosystem-wide change points. Plateaus denote regions of similar change."
+
+plot_sumz_density(
+  titan_m1_SCH_no_nest_Fert,
+  ribbon = FALSE,
+  points = TRUE,
+  xlabel = expression("Fertilisation level (kg N" ~ ha ^-1 ~ year ^ -1 * "), region SCH")
+)
+```
+
+```{r, eval=FALSE, eval=FALSE}
+#| label: fig-plot_sumz5
+#| fig-cap: "Plot change across all conservation indicators identified with TITAN2 for Fertilisation in SCH."
+plot_sumz(
+  titan_m1_SCH_no_nest_Fert, 
+  filter = TRUE,
+  xlabel = expression("Fertilisation level (kg N" ~ ha ^-1 ~ year ^ -1 * "), region SCH")
+)
+```
+
+## Appendix A13: TITAN analyses of significant predictors in region SCH including Nestedness as covariate.
+
+### SCH, w. Nestedness - Forest
+
+```{r}
+
+# Threshold Indicator Taxa Analysis
+titan_m1_SCH_Forest <-
+  titan(
+    as.data.frame(preds_m1_SCH)$Forest, # env vars
+    # remove red list butterfly indicators because they are all zeros due to absence in region
+    resp_m1_SCH[, !colnames(resp_m1_SCH) %in% c("red_list_butterflies", "threat_butterflies")], # indicators
+    minSplt = 5, # min split size to use during partitioning
+    numPerm = 1000, # n of random permutations to be used during ISA
+    boot = TRUE, # to conduct bootstrap resampling
+    nBoot = 1000, # n of replicates to use during bootstrap resampling
+    imax = FALSE, # to determine taxon-specific change points based on z-score maxima
+    ivTot = FALSE, # to calculate IndVal scores using mean relative abundance
+    pur.cut = 0.95, # cut-off for determining purity across bootstrap replicates
+    rel.cut = 0.95, # cut-off for determining reliability across bootstrap replicates.
+    ncpus = 8,
+    memory = FALSE,
+    messaging = TRUE
+  )
+```
+
+First, we got an error: "Minimum taxon occurrence frequency is 3, your data do not meet this criterion". The problem arises because the variables red_list_butterfly and threat_butterflies in region SCH are all zero, because we do not have red list species in that region. This was not a problem in dbRDA because the Gower metric can deal with double zeroes, but it is a problem for TITAN analysis. SOLUTION: we exclude these two variables.
+
+**Filter indicators that meet the purity and reliability criteria**
+
+```{r}
+#| label: tbl-A19
+#| fig-cap: "Pure and reliable indicators, Forest, matrix including nestedness, SCH"
+titan_m1_SCH_Forest$sppmax %>%
+  as.data.frame() %>%
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, purity, reliability, filter) %>%
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>%
+  # arranged by group: 1 (z- group) or 2 (z+ group), and then by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  select(-filter) %>% 
+  kable(booktabs = TRUE) 
+```
+
+-   Three conservation indicators were pure and reliable increasers (maxgrp = 2) i.e. the value of these indicator increased as Prop. of Forest/Wood in the landscape increased.
+
+-   The Prop. of Forest/Wood that most strongly differentiates plots based on connectance, plant richness, and trophic interactions is zenv.cp = 2.2%, 13.9%, and 13.9%, respectively. These indicators are more strongly associated with Prop. of Forest/Wood values ABOVE these thresholds (maxgrp = 2).
+
+**Ridge plot of conservation indicators: view the change point criteria for each conservation indicator**
+
+```{r, eval=FALSE}
+#| label: fig-A48
+#| fig-cap: "Ridge plot displaying conservation indicators that are strongly and consistently associated with sites under low (blue) or high (red) Prop. of Forest/Woodland in SCH, matrix including variable nestedness. Conservation indicators names are identified on the y-axis.The intensity of the color relates to the strength of the z-score obtained for IndVal. For each species indicator, the change points show the probability density function of the bootstrapped replicates, and the vertical line is the median."
+plot_taxa_ridges(
+  titan_m1_SCH_Forest,
+  d_lines = FALSE,
+  xaxis = TRUE,
+  # rel_heights = c(0.55, 0.45),
+  # breaks = c(1, 2),
+  z1 = FALSE, # set to F because we do not have decreasers
+  xlabel = "Prop. of Forest + Woodland at 1000 m from plot centroid, region SCH"
+) 
+```
+
+```{r, fig.height=7, eval=FALSE}
+#| label: tbl-A20
+#| fig-cap: "Indicator-specific change points with quantiles from bootstrapped samples and filtered by pure and reliable indicators for Forest, matrix including variable nestedness, SCH"
+plot_taxa(
+  titan_m1_SCH_Forest,
+  z1 = FALSE,
+  xlabel = "Prop. of Forest + Woodland at 1000 m from plot centroid, region SCH"
+) 
+```
+
+**Change across all indicator identified with TITAN2**
+
+```{r}
+#| label: fig-A49
+#| fig-cap: "Plot change across all conservation indicators identified with TITAN2 for Forest in SCH, matrix including variable nestedness. The top panel shows the magnitude of change among indicators declining (z-) and/or increasing (z+) along the gradient. Peaks in the values indicate points along the environmental gradient that produce large amounts of change in the values of community indicators. These are the nominal ecosystem-wide change points. Plateaus denote regions of similar change. "
+
+plot_sumz_density(
+  titan_m1_SCH_Forest, 
+  ribbon = FALSE, 
+  points = TRUE, 
+  xlabel = "Prop. of Forest + Woodland at 1000 m from plot centroid, region SCH)"
+)
+```
+
+```{r, eval=FALSE, eval=FALSE}
+#| label: fig-plot_sumz6
+#| fig-cap: "Plot change across all conservation indicators identified with TITAN2 for Forest in SCH, matrix including variable nestedness."
+plot_sumz(
+  titan_m1_SCH_Forest, 
+  filter = TRUE,
+  xlabel = "Prop. of Forest + Woodland at 1000 m from plot centroid, region SCH)"
+)
+```
+
+### SCH, w. Nestedness - Mowing
+
+```{r}
+
+# Threshold Indicator Taxa Analysis
+titan_m1_SCH_Mowing <-
+  titan(
+    as.data.frame(preds_m1_SCH)$Mowing, # env vars
+     # remove red list butterfly indicators because they are all zeros due to absence in region
+    resp_m1_SCH[, !colnames(resp_m1_SCH) %in% c("red_list_butterflies", "threat_butterflies")],
+    minSplt = 5, # min split size to use during partitioning
+    numPerm = 1000, # n of random permutations to be used during ISA
+    boot = TRUE, # to conduct bootstrap resampling
+    nBoot = 1000, # n of replicates to use during bootstrap resampling
+    imax = FALSE, # to determine taxon-specific change points based on z-score maxima
+    ivTot = FALSE, # to calculate IndVal scores using mean relative abundance
+    pur.cut = 0.95, # cut-off for determining purity across bootstrap replicates
+    rel.cut = 0.95, # cut-off for determining reliability across bootstrap replicates.
+    ncpus = 8,
+    memory = FALSE,
+    messaging = TRUE
+  )
+```
+
+**Filter indicators that meet the purity and reliability criteria**
+
+```{r}
+#| label: tbl-A21
+#| fig-cap: "Pure and reliable indicators, Mowing, matrix including nestedness, SCH"
+titan_m1_SCH_Mowing$sppmax %>%
+  as.data.frame() %>%
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, purity, reliability, filter) %>%
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>%
+  # arranged by group: 1 (z- group) or 2 (z+ group), and then by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  select(-filter) %>% 
+  kable(booktabs = TRUE) 
+```
+
+Conclusion: no indicators that meet the purity and reliability criteria.
+
+### SCH, w. Nestedness - Grazing
+
+```{r}
+
+# Threshold Indicator Taxa Analysis
+titan_m1_SCH_Grazing <-
+  titan(
+    as.data.frame(preds_m1_SCH)$Grazing, # env vars
+    resp_m1_SCH[, !colnames(resp_m1_SCH) %in% c("red_list_butterflies", "threat_butterflies")], # indicators
+    minSplt = 5, # min split size to use during partitioning
+    numPerm = 1000, # n of random permutations to be used during ISA
+    boot = TRUE, # to conduct bootstrap resampling
+    nBoot = 1000, # n of replicates to use during bootstrap resampling
+    imax = FALSE, # to determine taxon-specific change points based on z-score maxima
+    ivTot = FALSE, # to calculate IndVal scores using mean relative abundance
+    pur.cut = 0.95, # cut-off for determining purity across bootstrap replicates
+    rel.cut = 0.95, # cut-off for determining reliability across bootstrap replicates.
+    ncpus = 8,
+    memory = FALSE,
+    messaging = TRUE
+  )
+```
+
+**Filter indicators that meet the purity and reliability criteria**
+
+```{r}
+#| label: tbl-A22
+#| fig-cap: "Pure and reliable indicators, Grazing, matrix including nestedness, SCH"
+titan_m1_SCH_Grazing$sppmax %>%
+  as.data.frame() %>%
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, purity, reliability, filter) %>%
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>%
+  # arranged by group: 1 (z- group) or 2 (z+ group), and then by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  select(-filter) %>% 
+  kable(booktabs = TRUE) 
+```
+
+-   in region SCH, only one conservation indicator, namely trophic_interactions was a pure and reliable increaser (maxgrp = 2) i.e. the value of this indicator increased as grazing intensity increased.
+
+-   The GRAZING intensity that most strongly differentiates plots based on trophic interactions is zenv.cp = 0.845. This indicator is more strongly associated with grazing intensity values ABOVE that threshold (maxgrp = 2).
+
+**Ridge plot of conservation indicators: view the change point criteria for each conservation indicator**
+
+```{r, eval=FALSE}
+#| label: fig-A50
+#| fig-cap: "Ridge plot displaying conservation indicators that are strongly and consistently associated with sites under low (blue) or high (red) grazing intensity in SCH, matrix including variable nestedness. Conservation indicators names are identified on the y-axis.The intensity of the color relates to the strength of the z-score obtained for IndVal. For each indicator, the change points show the probability density function of the bootstrapped replicates, and the vertical line is the median."
+plot_taxa_ridges(
+  titan_m1_SCH_Grazing, 
+  d_lines = FALSE,
+  xaxis = TRUE,
+  # rel_heights = c(0.55, 0.45),
+  # breaks = c(1, 2),
+  z1 = FALSE, # set to F because we do not have decreasers
+  xlabel = expression("Grazing intensity (LSU × days of grazing" ~ ha^{-1} ~ year^{-1} * "), region SCH"), 
+) 
+```
+
+```{r, fig.height=7, eval=FALSE}
+#| label: fig-A51
+#| fig-cap: "Indicator-specific change points with quantiles from bootstrapped samples and filtered by pure and reliable indicators for Forest in SCH, matrix including variable nestedness."
+plot_taxa(
+  titan_m1_SCH_Grazing, 
+  z1 = FALSE, # set to F because we do not have decreasers
+  xlabel = expression("Grazing intensity (LSU × days of grazing" ~ ha^{-1} ~ year^{-1} * "), region SCH")) 
+```
+
+**Change across all indicator identified with TITAN2**
+
+```{r}
+#| label: fig-A52
+#| fig-cap: "Plot change across all conservation indicators identified with TITAN2 for Grazing in SCH, matrix including variable nestedness. The top panel shows the magnitude of change among indicators declining (z-) and/or increasing (z+) along the gradient. Peaks in the values indicate points along the environmental gradient that produce large amounts of change in the values of community indicators. These are the nominal ecosystem-wide change points. Plateaus denote regions of similar change. "
+
+plot_sumz_density(
+  titan_m1_SCH_Grazing, 
+  ribbon = FALSE, 
+  points = TRUE, 
+  xlabel = expression("Grazing intensity (LSU × days of grazing" ~ ha^{-1} ~ year^{-1} * "), region SCH"))
+```
+
+```{r, eval=FALSE, eval=FALSE}
+#| label: fig-plot_sumz7
+#| fig-cap: "Plot change across all conservation indicators identified with TITAN2 along Grazing gradient in SCH, matrix including variable nestedness." 
+
+plot_sumz(
+  titan_m1_SCH_Grazing, 
+  filter = TRUE,
+  xlabel = expression("Grazing intensity (LSU × days of grazing" ~ ha^{-1} ~ year^{-1} * "), region SCH")
+)
+```
+
+### SCH, w. Nestedness - Fert
+
+```{r}
+
+# Threshold Indicator Taxa Analysis
+titan_m1_SCH_Fert <-
+  titan(
+    as.data.frame(preds_m1_SCH)$Fert, # env vars
+    resp_m1_SCH[, !colnames(resp_m1_SCH) %in% c("red_list_butterflies", "threat_butterflies")], # indicators
+    minSplt = 5, # min split size to use during partitioning
+    numPerm = 1000, # n of random permutations to be used during ISA
+    boot = TRUE, # to conduct bootstrap resampling
+    nBoot = 1000, # n of replicates to use during bootstrap resampling
+    imax = FALSE, # to determine taxon-specific change points based on z-score maxima
+    ivTot = FALSE, # to calculate IndVal scores using mean relative abundance
+    pur.cut = 0.95, # cut-off for determining purity across bootstrap replicates
+    rel.cut = 0.95, # cut-off for determining reliability across bootstrap replicates.
+    ncpus = 8,
+    memory = FALSE,
+    messaging = TRUE
+  )
+```
+
+**Filter indicators that meet the purity and reliability criteria**
+
+```{r}
+#| label: tbl-A23
+#| fig-cap: "Pure and reliable indicators, Fertilisation, matrix including nestedness, SCH"
+titan_m1_SCH_Fert$sppmax %>%
+  as.data.frame() %>%
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, purity, reliability, filter) %>%
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>%
+  # arranged by group: 1 (z- group) or 2 (z+ group), and then by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  select(-filter) %>% 
+  kable(booktabs = TRUE) 
+```
+
+-   One conservation indicator, namely reg_dist_butterflies was a pure and reliable increaser (maxgrp = 2) i.e. the value of that indicator increased (i.e. butterfly species with bigger regional distribution range) as fertilisation level increased.
+
+-   The FERTILISATION level that most strongly differentiates plots based on reg_dist_butterflies is given by zenv.cp. These indicators are more strongly associated with fertilisation levels values ABOVE that thresholds (maxgrp = 2).
+
+**Ridge plot of conservation indicators: view the change point criteria for each conservation indicator**
+
+```{r, eval=FALSE}
+#| label: fig-A53
+#| fig-cap: "Ridge plot displaying conservation indicators that are strongly and consistently associated with sites under low (blue) or high (red) fertilisation level in SCH, matrix including variable nestedness. Conservation indicators names are identified on the y-axis.The intensity of the color relates to the strength of the z-score obtained for IndVal. For each indicator, the change points show the probability density function of the bootstrapped replicates, and the vertical line is the median."
+plot_taxa_ridges(
+  titan_m1_SCH_Fert,
+  d_lines = FALSE,
+  xaxis = TRUE,
+  # rel_heights = c(0.55, 0.45),
+  # breaks = c(1, 2),
+  z1 = FALSE, # set to F because we do not have decreasers
+  xlabel = expression("Fertilisation level (kg N" ~ ha^-1 ~ year^-1 * "), region SCH")
+) 
+```
+
+```{r, fig.height=7, eval=FALSE}
+#| label: fig-A54
+#| fig-cap: "Indicator-specific change points with quantiles from bootstrapped samples and filtered by pure and reliable indicators for Fertilisation in SCH, matrix including variable nestedness."
+
+plot_taxa(
+  titan_m1_SCH_Fert, 
+  z1 = FALSE, # set to F because we do not have decreasers
+  xlabel = expression("Fertilisation level (kg N" ~ ha^-1 ~ year^-1 * "), region SCH")
+) 
+```
+
+**Change across all indicator identified with TITAN2**
+
+```{r}
+#| label: fig-55
+#| fig-cap: "Plot change across all conservation indicators identified with TITAN2 for Fertilisation in SCH, matrix including variable nestedess. The top panel shows the magnitude of change among indicators declining (z-) and/or increasing (z+) along the gradient. Peaks in the values indicate points along the environmental gradient that produce large amounts of change in the values of community indicators. These are the nominal ecosystem-wide change points. Plateaus denote regions of similar change."
+
+plot_sumz_density(
+  titan_m1_SCH_Fert, 
+  ribbon = FALSE, 
+  points = TRUE, 
+  xlabel = expression("Fertilisation level (kg N" ~ ha^-1 ~ year^-1 * "), region SCH")
+)
+```
+
+## Boxplot for all significant predictors of model 1 per region
+
+```{r Boxplot-for-all-significant-predictors-of-model-1-per-region, include=FALSE, fig.width=5.5, fig.height=5}
+#| label: fig-56
+#| fig-cap: "Predictors per region shown as violin plots with boxplot and raw data superimpossed."
+
+bind_rows(
+  preds_m1_ALB %>% 
+    as_tibble(rownames = "Site") %>% 
+    mutate(Region = "ALB", .before = Site) %>%  
+    select(Region, Site, Forest, Arable, Mowing, Grazing, Fertilisation = Fert, PC1, PC2),
+  preds_m1_SCH %>% 
+    as_tibble(rownames = "Site") %>% 
+    mutate(Region = "SCH", .before = Site) %>% 
+    select(Region, Site, Forest, Arable, Mowing, Grazing, Fertilisation = Fert, PC1, PC2), 
+) %>% 
+  pivot_longer(
+    cols = Forest:last_col(), 
+    names_to = "Predictor",
+    values_to = "Value"
+  ) %>% 
+  ggplot(aes(x = Region, y = Value)) + 
+  geom_violin(aes(fill = Region), alpha = 0.2) + 
+  geom_boxplot(width = 0.15, color = "black", alpha = 0.3, outliers = FALSE) + 
+  geom_point(shape = 21, size = 0.8, aes(fill = Region),
+             alpha = 0.5, position = position_jitter(0.05)) +
+  scale_fill_manual(values = c("ALB" = "steelblue", 
+                                "SCH" = "chocolate")) +
+  facet_wrap(~Predictor, scales = "free") + 
+  theme(legend.position = "none",
+        axis.title = element_text(size = 14),
+        strip.text = element_text(size = 10))
+
+ggsave(
+  filename = "violin_plot_predictors.pdf",
+  plot = last_plot(),
+  path = "output/multivar_analysis/",
+  dpi = 300,
+  height = 5, 
+  width = 7.5,
+  units = "in",
+  bg = "white",
+  colormodel = "cmyk"
+)
+```
+
+## Plot thresholds: Mowing ALB
+
+```{r ALB-Mowing-Scatter-plots-of-significant-indicators-in-SCH-and-ALB-with-the-point-of-change-(z-value)-obtained-from-TITAN, include=TRUE, fig.height=5, fig.width=7.5}
+#| label: fig-57
+#| fig-cap: "Scatterplots of significant indicators per region with the predicted point of change from TITAN analysis for the selected environmental gradient."
+
+resps <- titan_m1_ALB_Mowing$sppmax %>% 
+  as.data.frame() %>% 
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, purity, reliability, filter) %>% 
+  # arranged by group: 1 (z- group) or 2 (z+ group), and by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>% 
+  rownames() 
+
+# Optional: Save to PDF (uncomment if needed)
+# pdf("output/multivar_analysis/TITAN_mowing_ALB_panels.pdf", width = 7.5, height = 5)
+
+# Set up layout
+par(mfrow = c(3, 4),           # 3 rows × 4 columns
+    mar = c(2, 2, 2, 1),       # tight plot margins
+    oma = c(4, 2, 1, 1))       # outer margins (bottom, left, top, right)
+
+for (i in seq_along(resps)) {
+
+  resp_name <- resps[i]
+
+  # Main panel
+  plot(
+    y = resp_m1_ALB[, resp_name],
+    x = preds_m1_ALB[, "Mowing"],
+    main = str_to_sentence(resp_name) %>%
+      str_replace_all(., "_", " ") %>%
+      str_replace(., "Multidiv", "Multidiversity") %>%
+      str_replace(., "Abund", "Abundance") %>%
+      str_replace_all(., "Reg dist ", "Reg. dist. ") %>%
+      str_replace(., "Red list ", "Red-list ") %>%
+      str_replace(., "Threat ", "Threat-level "),
+    xlab = "", ylab = ""
+  )
+
+  # TITAN stats
+  sppmax_row <- titan_m1_ALB_Mowing$sppmax[rownames(titan_m1_ALB_Mowing$sppmax) == resp_name, ]
+  cp <- sppmax_row["zenv.cp"]
+  grp <- sppmax_row["maxgrp"]
+  lci <- sppmax_row["5%"]
+  uci <- sppmax_row["95%"]
+  indval <- sppmax_row["IndVal"]
+
+  # Color & style
+  cp_col <- if (grp == 1) "chocolate" else "steelblue"
+  cp_lty <- if (grp == 1) 2 else 1
+
+  # Vertical changepoint + CI
+  abline(v = cp, col = cp_col, lty = cp_lty, lwd = 2)
+  abline(v = lci, col = cp_col, lty = 3, lwd = 1.5)
+  abline(v = uci, col = cp_col, lty = 3, lwd = 1.5)
+
+  # # Add IndVal as right-side bar inside the plot
+  # usr <- par("usr")  # get plot limits
+  # xright <- usr[2]
+  # xleft <- usr[2] - 0.05 * diff(usr[1:2])  # small bar width
+  # ybottom <- usr[3]
+  # ytop <- usr[3] + (indval / 100) * diff(usr[3:4])
+  # 
+  # rect(xleft, ybottom, xright, ytop,
+  #      col = adjustcolor(cp_col, alpha.f = 0.4), 
+  #      border = "gray30")
+}
+
+
+# Add shared x-axis label
+mtext(expression("Mowing frequency" ~ year^-1 * " "), side = 1, outer = TRUE, line = 2, cex = 1)
+
+# Optional: Close PDF device
+# dev.off()
+```
+
+## Plot thresholds: Grazing ALB
+
+```{r ALB-Grazing-Scatter-plots-of-significant-indicators-in-SCH-and-ALB-with-the-point-of-change-(z-value)-obtained-from-TITAN, include=TRUE, fig.height=5, fig.width=5}
+#| label: fig-58
+#| fig-cap: "Scatterplots of significant indicators per region with the predicted point of change from TITAN analysis for the selected environmental gradient."
+
+resps <- titan_m1_ALB_Grazing$sppmax %>% 
+  as.data.frame() %>% 
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, purity, reliability, filter) %>% 
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>% 
+  # arranged by group: 1 (z- group) or 2 (z+ group), and by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  rownames() 
+
+# Optional: Save to PDF (uncomment if needed)
+# pdf("output/multivar_analysis/TITAN_grazing_ALB_panels.pdf", width = 7.5, height = 3.5)
+
+# Set up layout
+par(mfrow = c(2, 4),           # rows × columns
+    mar = c(2, 2, 2, 1),       # tight plot margins
+    oma = c(4, 2, 1, 1))       # outer margins (bottom, left, top, right)
+
+for (i in seq_along(resps)) {
+  
+  resp_name <- resps[i]
+  
+  # Plot response vs env gradient
+  plot(
+    y = resp_m1_ALB[, resp_name],
+    x = preds_m1_ALB[,"Grazing"],
+    main = str_to_sentence(resp_name) %>% 
+      str_replace_all(., "_", " ") %>% 
+      str_replace(., "Multidiv", "Multidiversity") %>% 
+      str_replace(., "Abund", "Abundance") %>%
+      str_replace_all(., "Reg dist ", "Reg. dist. ") %>% 
+      str_replace(., "Red list ", "Red-list ") %>% 
+      str_replace(., "Threat ", "Threat-level "),
+    xlab = "",
+    ylab = ""
+  )
+  
+  # Get TITAN change point and group
+  sppmax_row <- titan_m1_ALB_Grazing$sppmax[rownames(titan_m1_ALB_Grazing$sppmax) == resp_name, ]
+  cp <- sppmax_row["zenv.cp"]
+  grp <- sppmax_row["maxgrp"]
+  lci <- sppmax_row["5%"]
+  uci <- sppmax_row["95%"]
+    indval <- sppmax_row["IndVal"]
+
+  # Color & style
+  cp_col <- if (grp == 1) "chocolate" else "steelblue"
+  cp_lty <- if (grp == 1) 2 else 1
+
+  # Vertical changepoint + CI
+  abline(v = cp, col = cp_col, lty = cp_lty, lwd = 2)
+  abline(v = lci, col = cp_col, lty = 3, lwd = 1.5)
+  abline(v = uci, col = cp_col, lty = 3, lwd = 1.5)
+
+  # # Add IndVal as right-side bar inside the plot
+  # usr <- par("usr")  # get plot limits
+  # xright <- usr[2]
+  # xleft <- usr[2] - 0.05 * diff(usr[1:2])  # small bar width
+  # ybottom <- usr[3]
+  # ytop <- usr[3] + (indval / 100) * diff(usr[3:4])
+  # 
+  # rect(xleft, ybottom, xright, ytop,
+  #      col = adjustcolor(cp_col, alpha.f = 0.4), 
+  #      border = "gray30")
+}
+
+# Add shared x-axis label
+mtext(expression("Grazing intensity (LSU × days of grazing" ~ ha^{-1} ~ year^{-1} * ")"), side = 1, outer = TRUE, line = -9, cex = 1)
+
+
+# Optional: Close PDF device
+# dev.off()
+```
+
+## Plot thresholds: Forest SCH
+
+```{r SCH-Forest-Scatter-plots-of-significant-indicators-in-SCH-and-ALB-with-the-point-of-change-(z-value)-obtained-from-TITAN, include=TRUE, fig.height=5, fig.width=3.5}
+#| label: fig-59
+#| fig-cap: "Scatterplots of significant indicators per region with the predicted point of change from TITAN analysis for the selected environmental gradient."
+
+resps <- titan_m1_SCH_no_nest_Forest$sppmax %>% 
+  as.data.frame() %>% 
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, purity, reliability, filter) %>% 
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>% 
+  # arranged by group: 1 (z- group) or 2 (z+ group), and by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  rownames() 
+
+# Optional: Save to PDF (uncomment if needed)
+# pdf("output/multivar_analysis/TITAN_forest_SCH_panels.pdf", width = 7.5, height = 3.5)
+
+# Set up layout
+par(mfrow = c(2, 4),           # 3 rows × 4 columns
+    mar = c(2, 2, 2, 1),       # tight plot margins
+    oma = c(4, 2, 1, 1))       # outer margins (bottom, left, top, right)
+
+for (i in seq_along(resps)) {
+  
+  resp_name <- resps[i]
+  
+  # Plot response vs env gradient
+  plot(
+    y = resp_m1_SCH[, resp_name],
+    x = preds_m1_SCH[,"Forest"],
+    main = str_to_sentence(resp_name) %>% 
+      str_replace_all(., "_", " ") %>% 
+      str_replace(., "Multidiv", "Multidiversity") %>% 
+      str_replace(., "Abund", "Abundance") %>%
+      str_replace_all(., "Reg dist ", "Reg. dist. ") %>% 
+      str_replace(., "Red list ", "Red-list ") %>% 
+      str_replace(., "Threat ", "Threat-level "),
+    xlab = "",
+    ylab = ""
+  )
+  
+  # Get TITAN change point and group
+  sppmax_row <- titan_m1_SCH_no_nest_Forest$sppmax[rownames(titan_m1_SCH_no_nest_Forest$sppmax) == resp_name, ]
+  cp <- sppmax_row["zenv.cp"]
+  grp <- sppmax_row["maxgrp"]
+  lci <- sppmax_row["5%"]
+  uci <- sppmax_row["95%"]
+  indval <- sppmax_row["IndVal"]
+
+  # Color & style
+  cp_col <- if (grp == 1) "chocolate" else "steelblue"
+  cp_lty <- if (grp == 1) 2 else 1
+
+  # Vertical changepoint + CI
+  abline(v = cp, col = cp_col, lty = cp_lty, lwd = 2)
+  abline(v = lci, col = cp_col, lty = 3, lwd = 1.5)
+  abline(v = uci, col = cp_col, lty = 3, lwd = 1.5)
+
+  # # Add IndVal as right-side bar inside the plot
+  # usr <- par("usr")  # get plot limits
+  # xright <- usr[2]
+  # xleft <- usr[2] - 0.05 * diff(usr[1:2])  # small bar width
+  # ybottom <- usr[3]
+  # ytop <- usr[3] + (indval / 100) * diff(usr[3:4])
+  # 
+  # rect(xleft, ybottom, xright, ytop,
+  #      col = adjustcolor(cp_col, alpha.f = 0.4), 
+  #      border = "gray30")
+}
+
+# Add shared x-axis label
+mtext(expression("Prop. of Forest + Woodland at 1000 m from plot centroid"), side = 1, outer = FALSE, line = 3, cex = 0.8, adj = 1)
+# mtext(expression("1000 m from plot centroid"), side = 1, outer = FALSE, line = 4.5, cex = 0.8, adj = 3)
+
+# Optional: Close PDF device
+# dev.off()
+```
+
+## Plot thresholds: Grazing SCH
+
+```{r SCH-Grazing-Scatter-plots-of-significant-indicators-in-SCH-and-ALB-with-the-point-of-change-(z-value)-obtained-from-TITAN, include=TRUE, fig.height=3.5, fig.width=3.5}
+#| label: fig-60
+#| fig-cap: "Scatterplots of significant indicators per region with the predicted point of change from TITAN analysis for the selected environmental gradient."
+
+resps <- titan_m1_SCH_no_nest_Grazing$sppmax %>% 
+  as.data.frame() %>% 
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, purity, reliability, filter) %>% 
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>% 
+  # arranged by group: 1 (z- group) or 2 (z+ group), and by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  rownames() 
+
+# Optional: Save to PDF (uncomment if needed)
+# pdf("output/multivar_analysis/TITAN_grazing_SCH_panels.pdf", width = 7.5, height = 3.5)
+
+# Set up layout
+par(mfrow = c(2, 4),           # 3 rows × 4 columns
+    mar = c(2, 2, 2, 1),       # tight plot margins
+    oma = c(4, 2, 1, 1))       # outer margins (bottom, left, top, right)
+
+for (i in seq_along(resps)) {
+  
+  resp_name <- resps[i]
+  
+  # Plot response vs env gradient
+  plot(
+    y = resp_m1_SCH[, resp_name],
+    x = preds_m1_SCH[,"Grazing"],
+    main = str_to_sentence(resp_name) %>% 
+      str_replace_all(., "_", " ") %>% 
+      str_replace(., "Multidiv", "Multidiversity") %>% 
+      str_replace(., "Abund", "Abundance") %>%
+      str_replace_all(., "Reg dist ", "Reg. dist. ") %>% 
+      str_replace(., "Red list ", "Red-list ") %>% 
+      str_replace(., "Threat ", "Threat-level "),
+    xlab = "",
+    ylab = ""
+  )
+  
+  # Get TITAN change point and group
+  sppmax_row <- titan_m1_SCH_no_nest_Grazing$sppmax[rownames(titan_m1_SCH_no_nest_Grazing$sppmax) == resp_name, ]
+  cp <- sppmax_row["zenv.cp"]
+  grp <- sppmax_row["maxgrp"]
+  lci <- sppmax_row["5%"]
+  uci <- sppmax_row["95%"]
+  indval <- sppmax_row["IndVal"]
+
+  # Color & style
+  cp_col <- if (grp == 1) "chocolate" else "steelblue"
+  cp_lty <- if (grp == 1) 2 else 1
+
+  # Vertical changepoint + CI
+  abline(v = cp, col = cp_col, lty = cp_lty, lwd = 2)
+  abline(v = lci, col = cp_col, lty = 3, lwd = 1.5)
+  abline(v = uci, col = cp_col, lty = 3, lwd = 1.5)
+
+  # # Add IndVal as right-side bar inside the plot
+  # usr <- par("usr")  # get plot limits
+  # xright <- usr[2]
+  # xleft <- usr[2] - 0.05 * diff(usr[1:2])  # small bar width
+  # ybottom <- usr[3]
+  # ytop <- usr[3] + (indval / 100) * diff(usr[3:4])
+  # 
+  # rect(xleft, ybottom, xright, ytop,
+  #      col = adjustcolor(cp_col, alpha.f = 0.4), 
+  #      border = "gray30")
+}
+
+# Add shared x-axis label
+mtext(expression("Grazing intensity (LSU ×"), side = 1, outer = FALSE, line = 3, cex = 0.8)
+mtext(expression("days of grazing" ~ ha^{-1} ~ year^{-1} * ")"), side = 1, outer = FALSE, line = 4.5, cex = 0.8)
+
+# Optional: Close PDF device
+# dev.off()
+```
+
+## Plot thresholds: Fertilisation SCH
+
+```{r SCH-Fertilisation-Scatter-plots-of-significant-indicators-in-SCH-and-ALB-with-the-point-of-change-(z-value)-obtained-from-TITAN, include=TRUE, fig.height=3.5, fig.width=3.5}
+#| label: fig-61
+#| fig-cap: "Scatterplots of significant indicators per region with the predicted point of change from TITAN analysis for the selected environmental gradient."
+
+resps <- titan_m1_SCH_no_nest_Fert$sppmax %>% 
+  as.data.frame() %>% 
+  select(zenv.cp, `5%`, `95%`, freq, maxgrp, IndVal, purity, reliability, filter) %>% 
+  # filter indicators that meet the purity and reliability criteria
+  filter(filter != 0) %>% 
+  # arranged by group: 1 (z- group) or 2 (z+ group), and by their change point
+  arrange(maxgrp, zenv.cp) %>% 
+  rownames() 
+
+# Optional: Save to PDF (uncomment if needed)
+# pdf("output/multivar_analysis/TITAN_fertilisation_SCH_panels.pdf", width = 7.5, height = 3.5)
+
+# Set up layout
+par(mfrow = c(2, 4),           # 3 rows × 4 columns
+    mar = c(2, 2, 2, 1),       # tight plot margins
+    oma = c(4, 2, 1, 1))       # outer margins (bottom, left, top, right)
+
+for (i in seq_along(resps)) {
+  
+  resp_name <- resps[i]
+  
+  # Plot response vs env gradient
+  plot(
+    y = resp_m1_SCH[, resp_name],
+    x = preds_m1_SCH[,"Fert"],
+    main = str_to_sentence(resp_name) %>% 
+      str_replace_all(., "_", " ") %>% 
+      str_replace(., "Multidiv", "Multidiversity") %>% 
+      str_replace(., "Abund", "Abundance") %>%
+      str_replace_all(., "Reg dist ", "Reg. dist. ") %>% 
+      str_replace(., "Red list ", "Red-list ") %>% 
+      str_replace(., "Threat ", "Threat-level "),
+    xlab = "",
+    ylab = ""
+  )
+  
+  # Get TITAN change point and group
+  sppmax_row <- titan_m1_SCH_no_nest_Fert$sppmax[rownames(titan_m1_SCH_no_nest_Fert$sppmax) == resp_name, ]
+  cp <- sppmax_row["zenv.cp"]
+  grp <- sppmax_row["maxgrp"]
+  lci <- sppmax_row["5%"]
+  uci <- sppmax_row["95%"]
+  indval <- sppmax_row["IndVal"]
+
+  # Color & style
+  cp_col <- if (grp == 1) "chocolate" else "steelblue"
+  cp_lty <- if (grp == 1) 2 else 1
+
+  # Vertical changepoint + CI
+  abline(v = cp, col = cp_col, lty = cp_lty, lwd = 2)
+  abline(v = lci, col = cp_col, lty = 3, lwd = 1.5)
+  abline(v = uci, col = cp_col, lty = 3, lwd = 1.5)
+
+  # # Add IndVal as right-side bar inside the plot
+  # usr <- par("usr")  # get plot limits
+  # xright <- usr[2]
+  # xleft <- usr[2] - 0.05 * diff(usr[1:2])  # small bar width
+  # ybottom <- usr[3]
+  # ytop <- usr[3] + (indval / 100) * diff(usr[3:4])
+  # 
+  # rect(xleft, ybottom, xright, ytop,
+  #      col = adjustcolor(cp_col, alpha.f = 0.4), 
+  #      border = "gray30")
+}
+
+# Add shared x-axis label
+mtext(expression("Fertilisation level"), side = 1, outer = FALSE, line = 3, cex = 0.8)
+mtext(expression("(kg N" ~ ha ^-1 ~ year ^-1 * ")"), side = 1, outer = FALSE, line = 4.5, cex = 0.8)
+
+# Optional: Close PDF device
+# dev.off()
+```
+
+```{r, include=FALSE}
+
+# Stop cluster set up for TITAN
+stopCluster(cl)
+```
+
+## Appendix A14: Summary table with pure and reliable conservation indicators from TITAN
+
+```{r}
+#| label: tbl-24
+#| tbl-cap: "Summary statistics for all pure and reliable conservation indicators, showing the observed change points (Obs.) along with their bootstrap confidence intervals (median values from 1000 simulation iterations). These change points correspond to the values yielding the maximum Indicator Value (IndVal) z-scores for each indicator. Freq. indicates the number of non-zero observations per indicator. The median z-score across replicates is indicated by z. Purity represents the mean proportion of correct response direction assignments (z− or z+), while reliability refers to the mean proportion of iterations with p-values ≤ 0.05 across 1,000 simulations."
+
+# set a function to obtain the predictor and the region of each df's name
+
+get_info_from_df_name <- function(df, name) {
+  region_val <- str_extract(name, "(?<=_)(ALB|SCH)$")
+  predictor_val <- str_extract(name, "(?<=TITAN_indicators_)(.*?)(?=_[A-Z]{3}$)")
+
+  df <- rownames_to_column(as.data.frame(df), "Indicator")
+
+  df %>%
+    mutate(Predictor = predictor_val, .before = Indicator) %>%
+    mutate(Region = region_val, .before = Predictor)
+}
+
+# combine all data frames into a list of object 
+
+named_list <- list(
+  TITAN_indicators_mowing_ALB = TITAN_indicators_mowing_ALB,
+  TITAN_indicators_grazing_ALB = TITAN_indicators_grazing_ALB,
+  TITAN_indicators_PC2_ALB = TITAN_indicators_PC2_ALB,
+  TITAN_indicators_forest_SCH = TITAN_indicators_forest_SCH,
+  TITAN_indicators_mowing_SCH = TITAN_indicators_mowing_SCH,
+  TITAN_indicators_grazing_SCH = TITAN_indicators_grazing_SCH,
+  TITAN_indicators_fert_SCH = TITAN_indicators_fert_SCH
+)
+
+# apply function and merge all datasets into one table
+
+combined_df <-
+  imap(named_list, get_info_from_df_name) %>% 
+  bind_rows() %>% 
+  rename_with(str_to_sentence, everything()) %>% 
+  mutate(Indicator = Indicator %>% 
+           str_replace_all(., "_", " ") %>% 
+           str_replace_all(., "multidiv", "multidiversity") %>% 
+           str_replace_all(., "red list", "red-list") %>% 
+           str_replace_all(., "reg dist", "reg. dist.")) %>% 
+  mutate(across(where(is.numeric), \(x) round(x, digits = 3))) %>% 
+  mutate(Maxgrp = 
+           case_when(Maxgrp == 1 ~ "z-",
+                     Maxgrp == 2 ~ "z+",
+                     .default = NA_character_)) %>% 
+    relocate(c(Maxgrp, Freq, Indval, Z.median), .before = Zenv.cp) %>% 
+    rename(Freq. = Freq,
+           Obs. = Zenv.cp,
+           z = Z.median,
+           `-/+` = Maxgrp)
+
+combined_df %>% 
+  kable()
+
+# save table into csv
+write_excel_csv(
+  combined_df, "output/multivar_analysis/tbl_TITAN_indicators_combined.csv")
+```
+
+# Bibliography

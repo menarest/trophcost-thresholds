@@ -1,0 +1,20 @@
+﻿"Region","Predictor","Indicator","-/+","Freq.","Indval","z","Obs.","5%","95%","Purity","Reliability"
+"ALB","mowing","plant richness","z-",45,58.02,5.553,0.5,0,1.5,1,1
+"ALB","mowing","trophic interactions","z-",45,73.83,5.672,1,0.5,2,1,1
+"ALB","mowing","butterfly richness","z-",45,71.29,6.503,1.5,1,2,1,1
+"ALB","mowing","multidiversity","z-",45,62.15,6.348,1.5,0,2,1,1
+"ALB","mowing","red-list butterflies","z-",29,67.11,5.421,1.5,0,2,1,0.996
+"ALB","mowing","abund butterflies","z-",45,93.12,5.452,1.5,1,2,1,1
+"ALB","mowing","threat butterflies","z-",29,59.69,4.645,2,0,2,0.99,0.959
+"ALB","mowing","nestedness","z-",40,73.3,3.762,2,0,2,0.993,0.953
+"ALB","mowing","reg. dist. butterflies","z+",45,55.22,5.406,0.5,0,2,0.999,0.998
+"ALB","mowing","crop pest potential","z+",21,58.93,4.639,1,0,2,0.988,0.957
+"ALB","mowing","connectance","z+",45,54.25,3.713,2,0,2.667,0.991,0.957
+"ALB","grazing","abund butterflies","z+",45,92.02,5.281,0,0,17.756,1,1
+"ALB","grazing","butterfly richness","z+",45,68.26,5.394,2.583,0,17.756,0.986,0.994
+"ALB","grazing","multidiversity","z+",45,60.41,4.863,2.583,0,18.84,0.978,0.995
+"ALB","grazing","trophic interactions","z+",45,72.56,4.89,2.583,0,17.756,0.981,0.999
+"SCH","forest","connectance","z+",43,61.15,4.855,0.08,0.021,0.089,0.995,0.988
+"SCH","forest","trophic interactions","z+",43,68.9,4.305,0.222,0.08,0.349,0.985,0.979
+"SCH","grazing","trophic interactions","z+",43,69.3,3.93,244.051,18.772,401.322,0.991,0.973
+"SCH","fert","reg. dist. butterflies","z+",43,50.64,3.76,0,0,70.149,0.998,0.978
