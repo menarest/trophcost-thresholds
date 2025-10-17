@@ -1,4 +1,4 @@
-<img width="468" height="40" alt="image" src="https://github.com/user-attachments/assets/090f98e6-ac43-4fe4-9fd1-39f78c2397a2" />[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15858289.svg)](https://doi.org/10.5281/zenodo.15858289)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15858289.svg)](https://doi.org/10.5281/zenodo.15858289)
 
 Supplementary code for analyses of Esteban Menares-Barraza (ORCID: 0000-0002-3731-3452), Hugo Saiz (ORCID: 0000-0002-7568-2996), Jörg Gelbrecht, Klaus Birkhofer (ORCID: 0000-0002-9301-2443) 2025, "Environmental and management thresholds for different conservation goals in grassland plant and butterfly communities". In submission.
 
